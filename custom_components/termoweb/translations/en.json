@@ -1,0 +1,32 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to Termoweb",
+        "description": "Version: {version}\n\nEnter your Termoweb account credentials",
+        "data": {
+          "username": "Email",
+          "password": "Password",
+          "poll_interval": "Polling interval (seconds)"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Invalid username or password (or client key).",
+      "cannot_connect": "Cannot connect to Termoweb — network/DNS/SSL error.",
+      "rate_limited": "Temporarily rate-limited by API. Try again later.",
+      "unknown": "Unknown error"
+    }
+  },
+  "options": {
+    "step": {
+      "edit": {
+        "title": "Termoweb Options",
+        "description": "Version: {version}",
+        "data": {
+          "poll_interval": "Polling interval (seconds)"
+        }
+      }
+    }
+  }
+}

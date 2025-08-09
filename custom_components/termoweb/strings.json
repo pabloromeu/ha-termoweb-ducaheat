@@ -1,0 +1,17 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to TermoWeb",
+        "description": "Enter your TermoWeb login credentials.",
+        "data": {
+          "username": "Email",
+          "password": "Password",
+          "poll_interval": "Base poll interval (seconds)"
+        }
+      }
+    },
+    "error": {},
+    "abort": {}
+  }
+}
