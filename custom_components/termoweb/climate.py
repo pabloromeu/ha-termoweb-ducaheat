@@ -16,6 +16,8 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
+from homeassistant.helpers import entity_platform
+import voluptuous as vol
 
 from .const import DOMAIN, signal_ws_data
 
@@ -67,6 +69,37 @@ async def async_setup_entry(hass, entry, async_add_entities):
         hass.async_create_task(build_and_add())
 
     coordinator.async_add_listener(_on_coordinator_update)
+
+    # -------------------- Register entity services --------------------
+    platform = entity_platform.async_get_current_platform()
+
+    # climate.set_schedule
+    platform.async_register_entity_service(
+        "set_schedule",
+        {
+            vol.Required("prog"): vol.All(
+                [vol.All(int, vol.In([0, 1, 2]))],
+                vol.Length(min=168, max=168),
+            )
+        },
+        "async_set_schedule",
+    )
+
+    # climate.set_preset_temperatures
+    platform.async_register_entity_service(
+        "set_preset_temperatures",
+        vol.Schema(
+            vol.Any(
+                {vol.Required("ptemp"): vol.All([vol.Coerce(float)], vol.Length(min=3, max=3))},
+                {
+                    vol.Required("cold"): vol.Coerce(float),
+                    vol.Required("night"): vol.Coerce(float),
+                    vol.Required("day"): vol.Coerce(float),
+                },
+            )
+        ),
+        "async_set_preset_temperatures",
+    )
 
 
 class TermoWebHeater(CoordinatorEntity, ClimateEntity):
@@ -226,7 +259,7 @@ class TermoWebHeater(CoordinatorEntity, ClimateEntity):
             "units": s.get("units"),
             "max_power": s.get("max_power"),
             "ptemp": s.get("ptemp"),
-            "prog": s.get("prog"),  # <-- expose full weekly program (168 ints)
+            "prog": s.get("prog"),  # full weekly program (168 ints)
         }
 
         slot = self._current_prog_slot(s)
@@ -242,7 +275,78 @@ class TermoWebHeater(CoordinatorEntity, ClimateEntity):
 
         return attrs
 
-    # -------------------- Write support --------------------
+    # -------------------- Entity services: schedule & preset temps --------------------
+    async def async_set_schedule(self, prog: list[int]) -> None:
+        """Write the 7x24 tri-state program to the device."""
+        # Validate defensively even though the schema should catch most issues
+        if not isinstance(prog, list) or len(prog) != 168:
+            _LOGGER.error("Invalid prog length for dev=%s addr=%s", self._dev_id, self._addr)
+            return
+        try:
+            prog2 = [int(x) for x in prog]
+            if any(x not in (0, 1, 2) for x in prog2):
+                raise ValueError("prog values must be 0/1/2")
+        except Exception as e:
+            _LOGGER.error("Invalid prog for dev=%s addr=%s: %s", self._dev_id, self._addr, e)
+            return
+
+        client = self._client()
+        try:
+            await client.set_htr_settings(self._dev_id, self._addr, prog=prog2, units=self._units())
+        except Exception as e:
+            status = getattr(e, "status", None)
+            body = getattr(e, "body", None) or getattr(e, "message", None) or str(e)
+            _LOGGER.error(
+                "Schedule write failed dev=%s addr=%s: status=%s body=%s",
+                self._dev_id,
+                self._addr,
+                status,
+                (str(body)[:200] if body else ""),
+            )
+            return
+
+        # Expect WS echo; schedule refresh if it doesn't arrive soon.
+        self._schedule_refresh_fallback()
+
+    async def async_set_preset_temperatures(self, **kwargs) -> None:
+        """Write the cold/night/day preset temperatures."""
+        if "ptemp" in kwargs and isinstance(kwargs["ptemp"], list):
+            p = kwargs["ptemp"]
+        else:
+            try:
+                p = [kwargs["cold"], kwargs["night"], kwargs["day"]]
+            except Exception:
+                _LOGGER.error("Preset temperatures require either ptemp[3] or cold/night/day fields")
+                return
+
+        if not isinstance(p, list) or len(p) != 3:
+            _LOGGER.error("Invalid ptemp length for dev=%s addr=%s", self._dev_id, self._addr)
+            return
+        try:
+            p2 = [float(x) for x in p]
+        except Exception as e:
+            _LOGGER.error("Invalid ptemp values for dev=%s addr=%s: %s", self._dev_id, self._addr, e)
+            return
+
+        client = self._client()
+        try:
+            await client.set_htr_settings(self._dev_id, self._addr, ptemp=p2, units=self._units())
+        except Exception as e:
+            status = getattr(e, "status", None)
+            body = getattr(e, "body", None) or getattr(e, "message", None) or str(e)
+            _LOGGER.error(
+                "Preset write failed dev=%s addr=%s: status=%s body=%s",
+                self._dev_id,
+                self._addr,
+                status,
+                (str(body)[:200] if body else ""),
+            )
+            return
+
+        # Expect WS echo; schedule refresh if it doesn't arrive soon.
+        self._schedule_refresh_fallback()
+
+    # -------------------- Existing write path (mode/setpoint) --------------------
     async def async_set_temperature(self, **kwargs: Any) -> None:
         """Set target temperature; server requires manual+stemp together (stemp string handled by API)."""
         raw = kwargs.get(ATTR_TEMPERATURE)
@@ -255,7 +359,13 @@ class TermoWebHeater(CoordinatorEntity, ClimateEntity):
         t = max(5.0, min(30.0, t))
         self._pending_stemp = t
         self._pending_mode = "manual"  # required by backend for setpoint acceptance
-        _LOGGER.info("Queue write: dev=%s addr=%s stemp=%.1f mode=manual (batching %.1fs)", self._dev_id, self._addr, t, _WRITE_DEBOUNCE)
+        _LOGGER.info(
+            "Queue write: dev=%s addr=%s stemp=%.1f mode=manual (batching %.1fs)",
+            self._dev_id,
+            self._addr,
+            t,
+            _WRITE_DEBOUNCE,
+        )
         await self._ensure_write_task()
 
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
@@ -264,7 +374,13 @@ class TermoWebHeater(CoordinatorEntity, ClimateEntity):
             self._pending_mode = "off"
         else:
             self._pending_mode = "auto"
-        _LOGGER.info("Queue write: dev=%s addr=%s mode=%s (batching %.1fs)", self._dev_id, self._addr, self._pending_mode, _WRITE_DEBOUNCE)
+        _LOGGER.info(
+            "Queue write: dev=%s addr=%s mode=%s (batching %.1fs)",
+            self._dev_id,
+            self._addr,
+            self._pending_mode,
+            _WRITE_DEBOUNCE,
+        )
         await self._ensure_write_task()
 
     async def async_set_preset_mode(self, preset_mode: str) -> None:
@@ -280,13 +396,22 @@ class TermoWebHeater(CoordinatorEntity, ClimateEntity):
             if cur is not None:
                 self._pending_stemp = float(cur)
 
-        _LOGGER.info("Queue write: dev=%s addr=%s mode=%s stemp=%s (batching %.1fs)", self._dev_id, self._addr, self._pending_mode, self._pending_stemp, _WRITE_DEBOUNCE)
+        _LOGGER.info(
+            "Queue write: dev=%s addr=%s mode=%s stemp=%s (batching %.1fs)",
+            self._dev_id,
+            self._addr,
+            self._pending_mode,
+            self._pending_stemp,
+            _WRITE_DEBOUNCE,
+        )
         await self._ensure_write_task()
 
     async def _ensure_write_task(self) -> None:
         if self._write_task and not self._write_task.done():
             return
-        self._write_task = asyncio.create_task(self._write_after_debounce(), name=f"termoweb-write-{self._dev_id}-{self._addr}")
+        self._write_task = asyncio.create_task(
+            self._write_after_debounce(), name=f"termoweb-write-{self._dev_id}-{self._addr}"
+        )
 
     async def _write_after_debounce(self) -> None:
         await asyncio.sleep(_WRITE_DEBOUNCE)
@@ -310,13 +435,28 @@ class TermoWebHeater(CoordinatorEntity, ClimateEntity):
 
         client = self._client()
         try:
-            _LOGGER.info("POST htr settings dev=%s addr=%s mode=%s stemp=%s", self._dev_id, self._addr, mode, stemp)
-            await client.set_htr_settings(self._dev_id, self._addr, mode=mode, stemp=stemp, units=self._units())
+            _LOGGER.info(
+                "POST htr settings dev=%s addr=%s mode=%s stemp=%s",
+                self._dev_id,
+                self._addr,
+                mode,
+                stemp,
+            )
+            await client.set_htr_settings(
+                self._dev_id, self._addr, mode=mode, stemp=stemp, units=self._units()
+            )
         except Exception as e:
             status = getattr(e, "status", None)
             body = getattr(e, "body", None) or getattr(e, "message", None) or str(e)
-            _LOGGER.error("Write failed dev=%s addr=%s mode=%s stemp=%s: status=%s body=%s",
-                          self._dev_id, self._addr, mode, stemp, status, (str(body)[:200] if body else ""))
+            _LOGGER.error(
+                "Write failed dev=%s addr=%s mode=%s stemp=%s: status=%s body=%s",
+                self._dev_id,
+                self._addr,
+                mode,
+                stemp,
+                status,
+                (str(body)[:200] if body else ""),
+            )
             return
 
         # Expect WS echo; schedule refresh if it doesn't arrive soon.
@@ -328,6 +468,11 @@ class TermoWebHeater(CoordinatorEntity, ClimateEntity):
             try:
                 await self.coordinator.async_request_refresh()
             except Exception as e:
-                _LOGGER.error("Refresh fallback failed dev=%s addr=%s: %s", self._dev_id, self._addr, str(e))
+                _LOGGER.error(
+                    "Refresh fallback failed dev=%s addr=%s: %s",
+                    self._dev_id,
+                    self._addr,
+                    str(e),
+                )
 
         asyncio.create_task(_fallback())
