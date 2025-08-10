@@ -226,6 +226,7 @@ class TermoWebHeater(CoordinatorEntity, ClimateEntity):
             "units": s.get("units"),
             "max_power": s.get("max_power"),
             "ptemp": s.get("ptemp"),
+            "prog": s.get("prog"),  # <-- expose full weekly program (168 ints)
         }
 
         slot = self._current_prog_slot(s)
