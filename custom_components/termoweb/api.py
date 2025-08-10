@@ -52,6 +52,7 @@ class TermoWebClient:
         self._password = password
         self._access_token: Optional[str] = None
         self._token_obtained_at: float = 0.0
+        self._token_expiry: float = 0.0
         self._lock = asyncio.Lock()
 
     async def _request(self, method: str, path: str, **kwargs) -> Any:
@@ -67,64 +68,72 @@ class TermoWebClient:
         url = path if path.startswith("http") else API_BASE + path
         _LOGGER.debug("HTTP %s %s", method, url)
 
-        try:
-            async with self._session.request(method, url, headers=headers, timeout=timeout, **kwargs) as resp:
-                ctype = resp.headers.get("Content-Type", "")
-                body_text: Optional[str]
-                try:
-                    body_text = await resp.text()
-                except Exception:
-                    body_text = "<no body>"
+        for attempt in range(2):
+            try:
+                async with self._session.request(method, url, headers=headers, timeout=timeout, **kwargs) as resp:
+                    ctype = resp.headers.get("Content-Type", "")
+                    body_text: Optional[str]
+                    try:
+                        body_text = await resp.text()
+                    except Exception:
+                        body_text = "<no body>"
 
-                if resp.status >= 400:
-                    # Log a compact, redacted error; do not log repr(RequestInfo) which includes headers.
-                    _LOGGER.error(
-                        "HTTP error %s %s -> %s; body=%s",
-                        method,
-                        url,
-                        resp.status,
-                        _redact_bearer(body_text),
-                    )
-                else:
-                    if API_LOG_PREVIEW:
-                        _LOGGER.debug(
-                            "HTTP %s -> %s, ctype=%s, body[0:200]=%r",
-                            url, resp.status, ctype, (_redact_bearer(body_text) or "")[:200],
+                    if resp.status >= 400:
+                        # Log a compact, redacted error; do not log repr(RequestInfo) which includes headers.
+                        _LOGGER.error(
+                            "HTTP error %s %s -> %s; body=%s",
+                            method,
+                            url,
+                            resp.status,
+                            _redact_bearer(body_text),
                         )
                     else:
-                        _LOGGER.debug("HTTP %s -> %s, ctype=%s", url, resp.status, ctype)
+                        if API_LOG_PREVIEW:
+                            _LOGGER.debug(
+                                "HTTP %s -> %s, ctype=%s, body[0:200]=%r",
+                                url, resp.status, ctype, (_redact_bearer(body_text) or "")[:200],
+                            )
+                        else:
+                            _LOGGER.debug("HTTP %s -> %s, ctype=%s", url, resp.status, ctype)
 
-                if resp.status == 401:
-                    raise TermoWebAuthError("Unauthorized")
-                if resp.status == 429:
-                    raise TermoWebRateLimitError("Rate limited")
-                if resp.status >= 400:
-                    raise aiohttp.ClientResponseError(
-                        resp.request_info, resp.history,
-                        status=resp.status, message=body_text, headers=resp.headers
-                    )
+                    if resp.status == 401:
+                        if attempt == 0:
+                            self._access_token = None
+                            self._token_expiry = 0.0
+                            token = await self._ensure_token()
+                            headers["Authorization"] = f"Bearer {token}"
+                            continue
+                        raise TermoWebAuthError("Unauthorized")
+                    if resp.status == 429:
+                        raise TermoWebRateLimitError("Rate limited")
+                    if resp.status >= 400:
+                        raise aiohttp.ClientResponseError(
+                            resp.request_info, resp.history,
+                            status=resp.status, message=body_text, headers=resp.headers
+                        )
 
-                # Try JSON first; fall back to text
-                if "application/json" in ctype or (body_text and body_text[:1] in ("{", "[")):
-                    try:
-                        return await resp.json(content_type=None)
-                    except Exception:
-                        return body_text
-                return body_text
+                    # Try JSON first; fall back to text
+                    if "application/json" in ctype or (body_text and body_text[:1] in ("{", "[")):
+                        try:
+                            return await resp.json(content_type=None)
+                        except Exception:
+                            return body_text
+                    return body_text
 
-        except (TermoWebAuthError, TermoWebRateLimitError):
-            raise
-        except Exception as e:
-            _LOGGER.error("Request %s %s failed (sanitized): %s", method, url, _redact_bearer(str(e)))
-            raise
+            except (TermoWebAuthError, TermoWebRateLimitError):
+                raise
+            except Exception as e:
+                _LOGGER.error("Request %s %s failed (sanitized): %s", method, url, _redact_bearer(str(e)))
+                raise
+        raise TermoWebAuthError("Unauthorized")
 
     async def _ensure_token(self) -> str:
         """Ensure a bearer token is present; fetch if missing."""
-        if self._access_token:
+        if self._access_token and time.time() <= self._token_expiry:
             return self._access_token
 
         async with self._lock:
-            if self._access_token:
+            if self._access_token and time.time() <= self._token_expiry:
                 return self._access_token
 
             data = {
@@ -168,6 +177,11 @@ class TermoWebClient:
                     raise TermoWebAuthError("No access_token in response")
                 self._access_token = token
                 self._token_obtained_at = time.time()
+                expires_in = js.get("expires_in")
+                if isinstance(expires_in, (int, float)):
+                    self._token_expiry = self._token_obtained_at + float(expires_in)
+                else:
+                    self._token_expiry = self._token_obtained_at + 3600
                 return token
 
     async def _authed_headers(self) -> Dict[str, str]:
