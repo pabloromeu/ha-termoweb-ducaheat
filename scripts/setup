@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -e
+
+# Install the project in editable mode using uv
+uv pip install --system -e .
+
+if [ -f ".pre-commit-config.yaml" ]; then
+    # Run pre-commit through uv to ensure the correct environment
+    uv run pre-commit install
+fi
