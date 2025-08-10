@@ -1,19 +1,23 @@
-
-## termoweb_openapi.yaml
-```yaml
 openapi: 3.0.3
 info:
   title: TermoWeb Cloud API (Confirmed Endpoints)
   version: "1.0.0"
   description: |
-    Confirmed REST endpoints and shapes (APK v2.5.1 + live tests).
+    Confirmed REST endpoints and shapes (APK v2.5.1 + live tests). This file focuses on
+    the heater settings, including writable weekly schedule (`prog`) and preset temperatures (`ptemp`).
+
 servers:
   - url: https://control.termoweb.net
 
 components:
   securitySchemes:
-    basicClientAuth: { type: http, scheme: basic }
-    bearerAuth: { type: http, scheme: bearer, bearerFormat: opaque }
+    basicClientAuth:
+      type: http
+      scheme: basic
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque
 
   parameters:
     DevId:
@@ -25,7 +29,10 @@ components:
       in: path
       name: addr
       required: true
-      schema: { oneOf: [ {type: integer}, {type: string} ] }
+      schema:
+        oneOf:
+          - { type: integer }
+          - { type: string }
 
   schemas:
     ErrorResponse:
@@ -33,70 +40,99 @@ components:
       additionalProperties: true
       properties:
         error:
-          oneOf: [ {type: string}, {type: object} ]
-    TokenResponse:
-      type: object
-      required: [access_token, token_type, expires_in]
-      properties:
-        access_token: { type: string }
-        token_type: { type: string, example: Bearer }
-        expires_in: { type: integer, example: 604800 }
-        scope: { type: string, example: "/user:W /devs/*:W" }
-    Device:
-      type: object
-      required: [dev_id]
-      additionalProperties: true
-      properties:
-        dev_id: { type: string }
-        name: { type: string }
-        fw_version: { type: string }
-        serial_id: { type: string }
-    DeviceListResponse:
-      type: object
-      properties:
-        devs: { type: array, items: { $ref: '#/components/schemas/Device' } }
-        invited_to: { type: array, items: { type: object } }
+          oneOf: [ { type: string }, { type: integer } ]
+        error_code:
+          oneOf: [ { type: string }, { type: integer } ]
+        message:
+          type: string
 
     ProgValue:
       type: integer
-      enum: [0,1,2]
+      enum: [0, 1, 2]
+      description: 0=cold, 1=night, 2=day
 
     HtrSettings:
       type: object
       additionalProperties: true
       properties:
-        state: { type: string, enum: [on, off] }
-        mode: { type: string, enum: [auto, manual, off] }
-        stemp: { oneOf: [ {type: string}, {type: number} ], example: "24.2" }
-        mtemp: { oneOf: [ {type: string}, {type: number} ], example: "23.8" }
+        name: { type: string }
+        state:
+          type: string
+          enum: [on, off]
+        mode:
+          type: string
+          enum: [auto, manual, off]
+        units:
+          type: string
+          enum: [C, F]
+        stemp:
+          description: May be returned as string or number by the server
+          oneOf:
+            - { type: string, pattern: "^[0-9]+(\\.[0-9])?$" }
+            - { type: number }
+        mtemp:
+          oneOf:
+            - { type: string, pattern: "^[0-9]+(\\.[0-9])?$" }
+            - { type: number }
         ptemp:
+          description: Preset temperatures [cold, night, day]
           type: array
           minItems: 3
           maxItems: 3
-          items: { oneOf: [ {type: string}, {type: number} ] }
+          items:
+            oneOf:
+              - { type: string, pattern: "^[0-9]+(\\.[0-9])?$" }
+              - { type: number }
           example: ["10.0","22.0","23.0"]
-        units: { type: string, enum: [C, F], example: C }
         prog:
+          description: 7x24 program; index 0 = Monday 00:00–01:00; values 0/1/2 map to cold/night/day
           type: array
           minItems: 168
           maxItems: 168
           items: { $ref: '#/components/schemas/ProgValue' }
         priority: { type: integer }
-        name: { type: string }
+        max_power: { type: integer }
+        addr:
+          oneOf: [{ type: string }, { type: integer }]
 
     HtrWrite:
       type: object
       additionalProperties: true
       properties:
-        mode: { type: string, enum: [auto, manual, off] }
-        # IMPORTANT: Server expects stemp as **string** when mode=manual.
-        stemp: { type: string, pattern: "^[0-9]+(\\.[0-9])?$", example: "16.0" }
-        units: { type: string, enum: [C, F], example: C }
+        mode:
+          type: string
+          enum: [auto, manual, off]
+        # IMPORTANT: send stemp as STRING with one decimal when setting manual setpoint
+        stemp:
+          type: string
+          pattern: "^[0-9]+(\\.[0-9])?$"
+          example: "20.0"
+        units:
+          type: string
+          enum: [C, F]
+          example: C
+        ptemp:
+          description: Write preset temps as strings with one decimal for compatibility
+          type: array
+          minItems: 3
+          maxItems: 3
+          items:
+            type: string
+            pattern: "^[0-9]+(\\.[0-9])?$"
+          example: ["10.0","22.0","23.0"]
+        prog:
+          description: Full weekly schedule; must be 168 integers with values 0/1/2
+          type: array
+          minItems: 168
+          maxItems: 168
+          items: { $ref: '#/components/schemas/ProgValue' }
 
 paths:
   /client/token:
     post:
-      security: [ { basicClientAuth: [] } ]
+      summary: Obtain bearer token
+      security:
+        - basicClientAuth: []
       requestBody:
         required: true
         content:
@@ -105,62 +141,99 @@ paths:
               type: object
               required: [username, password, grant_type]
               properties:
-                username: { type: string, format: email }
+                username: { type: string }
                 password: { type: string }
-                grant_type: { type: string, enum: [password], default: password }
-      responses:
-        '200': { description: Token, content: { application/json: { schema: { $ref: '#/components/schemas/TokenResponse' } } } }
-        '400': { description: Bad request, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
-        '401': { description: Invalid client, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
-
-  /api/v2/devs/:
-    get:
-      security: [ { bearerAuth: [] } ]
+                grant_type:
+                  type: string
+                  enum: [password]
       responses:
         '200':
-          description: Devices
-          content: { application/json: { schema: { $ref: '#/components/schemas/DeviceListResponse' } } }
-
-  /api/v2/devs/{dev_id}/mgr/nodes:
-    get:
-      security: [ { bearerAuth: [] } ]
-      parameters: [ { $ref: '#/components/parameters/DevId' } ]
-      responses:
-        '200':
-          description: Nodes
-          content: { application/json: { schema: { type: object, additionalProperties: true } } }
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [access_token]
+                properties:
+                  access_token: { type: string }
 
   /api/v2/devs/{dev_id}/htr/{addr}/settings:
     get:
+      summary: Read heater settings/state
       security: [ { bearerAuth: [] } ]
-      parameters: [ { $ref: '#/components/parameters/DevId' }, { $ref: '#/components/parameters/Addr' } ]
+      parameters:
+        - $ref: '#/components/parameters/DevId'
+        - $ref: '#/components/parameters/Addr'
       responses:
-        '200': { description: Heater settings, content: { application/json: { schema: { $ref: '#/components/schemas/HtrSettings' } } } }
+        '200':
+          description: Current settings/state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HtrSettings'
+
     post:
+      summary: Update heater settings (partial allowed)
+      description: |
+        Send only fields that need to change. For manual setpoint, include both mode="manual" and stemp as a string.
+        When updating the weekly schedule, send the full 168-element `prog` array.
       security: [ { bearerAuth: [] } ]
-      parameters: [ { $ref: '#/components/parameters/DevId' }, { $ref: '#/components/parameters/Addr' } ]
+      parameters:
+        - $ref: '#/components/parameters/DevId'
+        - $ref: '#/components/parameters/Addr'
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/HtrWrite' }
+            schema:
+              $ref: '#/components/schemas/HtrWrite'
             examples:
               manual_setpoint:
-                summary: Manual + setpoint
-                value: { mode: manual, stemp: "16.0", units: C }
+                summary: Switch to manual with setpoint
+                value: { mode: manual, stemp: "20.0", units: C }
               auto_mode:
-                summary: Program (auto)
+                summary: Switch to auto (program)
                 value: { mode: auto, units: C }
-              off_mode:
-                summary: Off
-                value: { mode: off, units: C }
+              write_ptemp:
+                summary: Update preset temps
+                value: { ptemp: ["10.0","22.0","23.0"], units: C }
+              write_prog:
+                summary: Update weekly schedule
+                value:
+                  units: C
+                  prog: [0,0,0,0,0,0,0,1,1,2,2,2,2,2,2,2,1,1,0,0,0,0,0,0,
+                         0,0,0,0,0,0,0,1,1,2,2,2,2,2,2,2,1,1,0,0,0,0,0,0,
+                         0,0,0,0,0,0,0,1,1,2,2,2,2,2,2,2,1,1,0,0,0,0,0,0,
+                         0,0,0,0,0,0,0,1,1,2,2,2,2,2,2,2,1,1,0,0,0,0,0,0,
+                         0,0,0,0,0,0,0,1,1,2,2,2,2,2,2,2,1,1,0,0,0,0,0,0,
+                         0,0,0,0,0,0,0,1,1,2,2,2,2,2,2,2,1,1,0,0,0,0,0,0,
+                         0,0,0,0,0,0,0,1,1,2,2,2,2,2,2,2,1,1,0,0,0,0,0,0]
       responses:
-        '201': { description: Accepted }
-        '400': { description: Bad request (e.g., stemp sent as number), content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '201':
+          description: Accepted
+        '400':
+          description: Bad request (e.g. wrong types or invalid lengths)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthorized
+        '429':
+          description: Rate limited
 
   /api/v2/devs/{dev_id}/htr/{addr}/advanced_setup:
     get:
+      summary: Read advanced flags (opaque)
       security: [ { bearerAuth: [] } ]
-      parameters: [ { $ref: '#/components/parameters/DevId' }, { $ref: '#/components/parameters/Addr' } ]
+      parameters:
+        - $ref: '#/components/parameters/DevId'
+        - $ref: '#/components/parameters/Addr'
       responses:
-        '200': { description: Advanced setup, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '200':
+          description: Opaque flags
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true

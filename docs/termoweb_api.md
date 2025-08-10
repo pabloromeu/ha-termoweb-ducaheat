@@ -1,103 +1,135 @@
-# TermoWeb Cloud API — Confirmed Subset (updated 2025-08-09)
+# TermoWeb Cloud API — Confirmed Subset (updated 2025-08-10)
 
-**Sources of truth**
-- TermoWeb Android app v2.5.1 (Cordova) decompile, plus
-- Live traffic (curl + HA integration).
-
-This document lists **only** endpoints we have verified end-to-end.
+**Scope**  
+This document lists only the endpoints and fields we have verified end-to-end from the Android app and live traffic, sufficient for the Home Assistant integration.
 
 ## Base
 - Host: `https://control.termoweb.net`
-- JSON responses; CORS `*` observed.
-- Typical headers (not strictly required):  
-  `User-Agent: TermoWeb/2.5.1 (Android; HomeAssistant Integration)`  
-  `Accept-Language: en-IE,en;q=0.8`  
-  `Accept: application/json`
+- JSON everywhere.
+- Typical headers (not required, but good hygiene):
+  - `User-Agent: TermoWeb/2.5.1 (HomeAssistant Integration)`
+  - `Accept-Language: en-IE,en;q=0.8`
+  - `Accept: application/json`
 
-## Auth (Password Grant, public client)
-**POST** `/client/token`  
-Headers:
-- `Authorization: Basic NTIxNzJkY...` *(public client baked into APK v2.5.1)*
-- `Content-Type: application/x-www-form-urlencoded; charset=UTF-8`
+## Auth
+**POST `/client/token`** (basic client auth) → 200 JSON
+- Request body (form-encoded): `username`, `password`, `grant_type=password`
+- Response: `{ "access_token": "<opaque>" }`
+- Use `Authorization: Bearer <access_token>` for subsequent requests.
 
-Form:
+---
 
-username=<email>
-password=<password>
-grant_type=password
+## Devices and heaters
 
-200 JSON → `{ access_token, token_type=Bearer, expires_in, scope }`
+### Get heater settings
+**GET `/api/v2/devs/{dev_id}/htr/{addr}/settings`** → 200 JSON
 
-Use `Authorization: Bearer <access_token>` for subsequent calls.
+Representative shape (additional fields may be present):
+```json
+{
+  "name": "Heater 1",
+  "state": "on",
+  "mode": "auto",             // "auto"|"manual"|"off"
+  "units": "C",               // "C"|"F"
+  "stemp": "21.0",            // may appear as string or number server-side
+  "mtemp": "20.8",
+  "ptemp": ["10.0","22.0","23.0"],   // presets: [cold, night, day]
+  "prog":  [0,0,0,0,0,0,0, 1,1,2,2,2, ... 168 values ...],
+  "priority": 1,
+  "max_power": 1000,
+  "addr": 1
+}
+```
 
-## Devices & Nodes
-- **GET** `/api/v2/devs/` → 200 `{ devs: [...], invited_to: [] }`
-- **GET** `/api/v2/devs/{dev_id}/mgr/nodes` → 200 `{ nodes: [...] }`  
-  Heaters are `type: "htr"`.
+**Schedule semantics (`prog`)**
+- `prog` is a **168-element** array of integers, one per hour for a 7×24 week grid.
+- **Indexing:** index `0` maps to **Monday 00:00–01:00**, then hour-by-hour through the week (Mon→Sun).
+- **Values:** `0` = **cold**, `1` = **night**, `2` = **day**.
+- The corresponding temperatures are in `ptemp = [cold, night, day]`.
 
-## Heaters (per node)
-### Read
-- **GET** `/api/v2/devs/{dev_id}/htr/{addr}/settings` → 200 JSON  
-  Representative payload:
-  ```json
-  {
-    "state":"off",
-    "mode":"auto",
-    "stemp":"10.0",
-    "mtemp":"24.2",
-    "ptemp":["10.0","22.0","23.0"],
-    "units":"C",
-    "prog":[ /* 168 ints (0/1/2) */ ],
-    "priority":0,
-    "name":"Master Bedroom "
-  }
+**Preset temperatures (`ptemp`)**
+- Length 3, **[cold, night, day]**.
+- Server accepts and often returns temperatures as **strings with one decimal**. Treat as strings when writing to avoid `400` on some backends.
 
-mtemp ambient; stemp target; both strings.
-prog is 24×7 (168), hourly values 0/1/2 mapping to ptemp[0=cold,1=night,2=day]. Week starts on Monday 00:00.
+### Write heater settings (partial updates allowed)
+**POST `/api/v2/devs/{dev_id}/htr/{addr}/settings`** → 201 (Accepted)
 
+Send only the fields you intend to change (server merges).
 
-    POST /api/v2/devs/{dev_id}/htr/{addr}/settings
-    JSON body fields (observed):
+Common fields:
+- `mode`: `"auto"|"manual"|"off"`
+- `stemp`: when setting manual setpoint, send as **string with one decimal**, e.g. `"16.0"`
+- `units`: `"C"` or `"F"`
+- `ptemp`: array of 3 **strings** with one decimal, e.g. `["10.0","22.0","23.0"]`
+- `prog`: array of **168 integers**, each in `{0,1,2}`
 
-        mode: "auto" | "manual" | "off"
+**Examples**
 
-        stemp: string temperature like "16.0" (server 400s if number in some cases)
+Set manual mode with setpoint:
+```json
+{ "mode": "manual", "stemp": "20.0", "units": "C" }
+```
 
-        units: "C" (always included)
+Switch to auto (program) mode:
+```json
+{ "mode": "auto", "units": "C" }
+```
 
-Rules observed:
+Update preset temperatures (cold, night, day):
+```json
+{ "ptemp": ["10.0","22.0","23.0"], "units": "C" }
+```
 
-    To set a manual setpoint, send both mode:"manual" and stemp:"%.1f".
+Update the full weekly schedule (tri-state grid):
+```json
+{ "prog": [0,0,0,0,0,0,0, 1,1,2,2,2, ... 168 values ...], "units": "C" }
+```
 
-    Sending stemp as a number (e.g. 16.0) can return 400 {"error_code":5}.
+**Notes**
+- If you send `stemp` for a manual setpoint, include `mode:"manual"` in the same POST.
+- Always include `units` in writes for consistency.
+- The server accepts **partial writes**; do not send unrelated fields to avoid clobbering concurrent changes.
 
-    mode:"auto" and mode:"off" accept with 201 without stemp.
+---
 
-    Treat as non-portable; always send mode:"manual" with setpoint.
+## Advanced setup (read)
+**GET `/api/v2/devs/{dev_id}/htr/{addr}/advanced_setup`** → 200 JSON  
+Opaque feature flags (e.g. window mode, true radiant). We currently read-only.
 
-Advanced flags
+---
 
-    GET /api/v2/devs/{dev_id}/htr/{addr}/advanced_setup → 200 JSON (window_mode, true_radiant, etc.)
-
-Realtime (Socket.IO 0.9)
-
+## Realtime (Socket.IO 0.9, legacy)
 Handshake:
+```
+GET /socket.io/1/?token=<Bearer>&dev_id=<dev_id>&t=<ms>
+→ "<sid>:<hb>:<disc>:websocket,xhr-polling"
+```
+WebSocket:
+```
+wss://control.termoweb.net/socket.io/1/websocket/<sid>?token=...&dev_id=...
+```
+Join namespace:
+```
+1::/api/v2/socket_io
+```
+Heartbeat:
+- Server sends `2::`; client replies `2::` every ~25–30s.
 
-    GET /socket.io/1/?token=<Bearer>&dev_id=<dev_id>&t=<ms> → <sid>:<hb>:<disc>:websocket,xhr-polling
-    WS:
+Snapshot:
+```
+5::/api/v2/socket_io:{"name":"dev_data","args":[]}
+```
+Push (batched deltas):
+```
+5::/api/v2/socket_io:{"name":"data","args":[ [ { "path":"...", "body":{...} }, ... ] ]}
+```
+Observed paths:
+- `/htr/<addr>/settings`
+- `/htr/<addr>/advanced_setup`
+- `/mgr/nodes`
+- `/geo_data`
+- `/htr_system/power_limit`
 
-    wss://control.termoweb.net/socket.io/1/websocket/<sid>?token=...&dev_id=...
-    Join:
+We rely on these events to echo state after writes; a timed fallback refresh is recommended if echo is delayed.
 
-    1::/api/v2/socket_io
-    Heartbeat:
-
-    Server sends 2::; client replies 2:: every ~25–30s.
-    Snapshot:
-
-    5::/api/v2/socket_io:{"name":"dev_data","args":[]}
-    Push:
-
-    5::/api/v2/socket_io:{"name":"data","args":[ [ { "path":"...", "body":{...} }, ... ] ]}
-    Paths: /htr/<addr>/settings, /htr/<addr>/advanced_setup, /mgr/nodes, /geo_data, /htr_system/power_limit.
-    
+---
