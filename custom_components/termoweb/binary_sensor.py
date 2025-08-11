@@ -12,90 +12,95 @@ from homeassistant.helpers.entity import DeviceInfo
 from .const import DOMAIN, signal_ws_status
 from .coordinator import TermoWebCoordinator
 
+_LOGGER = logging.getLogger(__name__)
+
 
 async def async_setup_entry(hass, entry, async_add_entities):
+    """Set up one connectivity binary sensor per TermoWeb hub (dev_id)."""
     coord: TermoWebCoordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
-    added_ids: set[str] = hass.data[DOMAIN][entry.entry_id].setdefault("added_binary_ids", set())
-    _logger = logging.getLogger(__name__)
+    added_ids: set[str] = hass.data[DOMAIN][entry.entry_id].setdefault(
+        "added_binary_ids", set()
+    )
 
     @callback
     def _add_entities() -> None:
-        """Add binary sensor entities for newly discovered devices.
-
-        Each entity is constructed and added individually. Exceptions during
-        construction or addition are caught and logged to ensure that a
-        problematic device does not abort the entire setup. Without this
-        defensive logic, Home Assistant will emit generic "Error adding entity
-        None" messages when an entity raises during initialisation.
-        """
-        for dev_id, data in (coord.data or {}).items():
+        # Add exactly one sensor per dev_id (the hub)
+        for dev_id, _data in (coord.data or {}).items():
             uid = f"{dev_id}_online"
             if uid in added_ids:
                 continue
             try:
                 ent = TermoWebDeviceOnlineBinarySensor(coord, entry.entry_id, dev_id)
-            except Exception as exc:
-                _logger.error("Failed to create binary sensor for dev_id=%s: %s", dev_id, exc)
-                continue
-            try:
                 async_add_entities([ent])
+                added_ids.add(uid)
             except Exception as exc:
-                _logger.error("Failed to add binary sensor for dev_id=%s: %s", dev_id, exc)
-                continue
-            added_ids.add(uid)
+                _LOGGER.error("Failed to add hub binary sensor dev_id=%s: %s", dev_id, exc)
 
     coord.async_add_listener(_add_entities)
     if coord.data:
         _add_entities()
 
 
-class TermoWebDeviceOnlineBinarySensor(CoordinatorEntity[TermoWebCoordinator], BinarySensorEntity):
+class TermoWebDeviceOnlineBinarySensor(
+    CoordinatorEntity[TermoWebCoordinator], BinarySensorEntity
+):
+    """Connectivity sensor for the TermoWeb hub (gateway)."""
+
     _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
+    _attr_should_poll = False
 
     def __init__(self, coordinator: TermoWebCoordinator, entry_id: str, dev_id: str) -> None:
         super().__init__(coordinator)
         self._entry_id = entry_id
-        self._dev_id = dev_id
-        data = coordinator.data.get(dev_id, {})
-        self._attr_name = f"{(data.get('name') or dev_id).strip()} Online"
-        self._attr_unique_id = f"{dev_id}_online"
+        self._dev_id = str(dev_id)
+        data = coordinator.data.get(self._dev_id, {}) or {}
+        base_name = (data.get("name") or self._dev_id)
+        try:
+            base_name = str(base_name).strip()
+        except Exception:
+            base_name = str(self._dev_id)
+        self._attr_name = f"{base_name} Online"
+        self._attr_unique_id = f"{self._dev_id}_online"
         self._unsub_ws = None
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
-        # Listen for WS status to expose diagnostics on the hub device entity
         self._unsub_ws = async_dispatcher_connect(
             self.hass, signal_ws_status(self._entry_id), self._on_ws_status
         )
         self.async_on_remove(lambda: self._unsub_ws() if self._unsub_ws else None)
 
     def _ws_state(self) -> dict[str, Any]:
-        rec = self.hass.data[DOMAIN][self._entry_id]
-        return (rec.get("ws_state") or {}).get(self._dev_id, {})  # status, last_event_at, healthy_minutes…
+        rec = self.hass.data.get(DOMAIN, {}).get(self._entry_id, {}) or {}
+        return (rec.get("ws_state") or {}).get(self._dev_id, {})
 
     @property
     def is_on(self) -> bool:
-        data = self.coordinator.data.get(self._dev_id, {})
-        # connected may be True/False/None (unknown when endpoint 404s)
+        data = (self.coordinator.data or {}).get(self._dev_id, {}) or {}
         return bool(data.get("connected"))
 
     @property
-    def device_info(self) -> dict[str, Any]:
-        data = self.coordinator.data.get(self._dev_id, {})
-        # Read version from manifest (stored at setup) to keep DRY with the manifest
-        version = self.hass.data[DOMAIN][self._entry_id].get("version")
-        return {
-            "identifiers": {(DOMAIN, self._dev_id)},
-            "name": (data.get("name") or self._dev_id).strip(),
-            "manufacturer": "ATC / Termoweb",
-            "model": data.get("raw", {}).get("model") or "Heater/Controller",
-            "sw_version": version,
-            "configuration_url": "https://control.termoweb.net",
-        }
+    def device_info(self) -> DeviceInfo:
+        data = (self.coordinator.data or {}).get(self._dev_id, {}) or {}
+        version = (self.hass.data.get(DOMAIN, {}).get(self._entry_id, {}) or {}).get("version")
+        model = (data.get("raw") or {}).get("model") or "Gateway/Controller"
+        name = (data.get("name") or self._dev_id)
+        try:
+            name = str(name).strip()
+        except Exception:
+            name = str(self._dev_id)
+        return DeviceInfo(
+            identifiers={(DOMAIN, self._dev_id)},
+            name=name,
+            manufacturer="ATC / Termoweb",
+            model=str(model),
+            sw_version=str(version) if version is not None else None,
+            configuration_url="https://control.termoweb.net",
+        )
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        data = self.coordinator.data.get(self._dev_id, {})
+        data = (self.coordinator.data or {}).get(self._dev_id, {}) or {}
         ws = self._ws_state()
         return {
             "dev_id": self._dev_id,
@@ -111,5 +116,4 @@ class TermoWebDeviceOnlineBinarySensor(CoordinatorEntity[TermoWebCoordinator], B
     def _on_ws_status(self, payload: dict) -> None:
         if payload.get("dev_id") != self._dev_id:
             return
-        # Status changed; attributes may have changed too
         self.schedule_update_ha_state()
