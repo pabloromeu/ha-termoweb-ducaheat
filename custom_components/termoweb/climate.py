@@ -316,6 +316,7 @@ class TermoWebHeater(CoordinatorEntity, ClimateEntity):
         client = self._client()
         try:
             await client.set_htr_settings(self._dev_id, self._addr, prog=prog2, units=self._units())
+            _LOGGER.debug("Schedule write OK dev=%s addr=%s (prog_len=%d)", self._dev_id, self._addr, len(prog2))
         except Exception as e:
             status = getattr(e, "status", None)
             body = getattr(e, "body", None) or getattr(e, "message", None) or str(e)
@@ -327,6 +328,19 @@ class TermoWebHeater(CoordinatorEntity, ClimateEntity):
                 (str(body)[:200] if body else ""),
             )
             return
+
+        # Optimistic local update so HA shows the change immediately
+        try:
+            d = (self.coordinator.data or {}).get(self._dev_id, {})
+            htr = d.get("htr") or {}
+            settings_map = htr.get("settings") or {}
+            cur = settings_map.get(self._addr)
+            if isinstance(cur, dict):
+                cur["prog"] = list(prog2)
+                self.async_write_ha_state()
+                _LOGGER.debug("Optimistic prog applied dev=%s addr=%s", self._dev_id, self._addr)
+        except Exception as e:
+            _LOGGER.debug("Optimistic prog update failed dev=%s addr=%s: %s", self._dev_id, self._addr, e)
 
         # Expect WS echo; schedule refresh if it doesn't arrive soon.
         self._schedule_refresh_fallback()
@@ -354,6 +368,7 @@ class TermoWebHeater(CoordinatorEntity, ClimateEntity):
         client = self._client()
         try:
             await client.set_htr_settings(self._dev_id, self._addr, ptemp=p2, units=self._units())
+            _LOGGER.debug("Preset write OK dev=%s addr=%s ptemp=%s", self._dev_id, self._addr, p2)
         except Exception as e:
             status = getattr(e, "status", None)
             body = getattr(e, "body", None) or getattr(e, "message", None) or str(e)
@@ -365,6 +380,19 @@ class TermoWebHeater(CoordinatorEntity, ClimateEntity):
                 (str(body)[:200] if body else ""),
             )
             return
+
+        # Optimistic local update so HA shows the change immediately
+        try:
+            d = (self.coordinator.data or {}).get(self._dev_id, {})
+            htr = d.get("htr") or {}
+            settings_map = htr.get("settings") or {}
+            cur = settings_map.get(self._addr)
+            if isinstance(cur, dict):
+                cur["ptemp"] = [f"{t:.1f}" if isinstance(t, float) else t for t in p2]
+                self.async_write_ha_state()
+                _LOGGER.debug("Optimistic ptemp applied dev=%s addr=%s", self._dev_id, self._addr)
+        except Exception as e:
+            _LOGGER.debug("Optimistic ptemp update failed dev=%s addr=%s: %s", self._dev_id, self._addr, e)
 
         # Expect WS echo; schedule refresh if it doesn't arrive soon.
         self._schedule_refresh_fallback()

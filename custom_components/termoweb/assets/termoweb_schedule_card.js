@@ -1,223 +1,433 @@
-// Minimal 7x24 schedule editor for TermoWeb heaters
-// Usage in Lovelace:
-// resources:
-//   - url: /local/termoweb/termoweb-schedule-card.js
-//     type: module
-// card:
-//   - type: custom:termoweb-schedule-card
-//     title: Bedroom heater schedule
-//     entity: climate.bedroom_heater
+// TermoWeb Schedule Card — rebuilt with edit-freeze + manual refresh
+// Features:
+// - 7×24 schedule painter (0=cold, 1=night, 2=day)
+// - Preset temperature editors (ptemp: [cold, night, day])
+// - Writes via entity services on the integration domain:
+//     termoweb.set_schedule
+//     termoweb.set_preset_temperatures
+// - Local edit freeze: while the user is editing or after Save, the card will
+//   NOT hydrate from HA state until the user clicks Refresh, or until a timed
+//   window elapses and the incoming state matches the last-sent payload.
+// - Colors: Cold = Cyan (#00BCD4), Day = Orange (#FB8C00), Night = Dark Blue (#0D47A1)
+// - Indexing: Monday-based; index = day*24 + hour
+//
+// v1.1.0
 
 (() => {
-  const CARD_TAG = "termoweb-schedule-card";
-  const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-  const LABELS = ["Cold", "Night", "Day"];
-  const VALID = new Set([0, 1, 2]);
+  const DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  const HOUR_LABELS = Array.from({ length: 24 }, (_, h) => `${String(h).padStart(2, "0")}:00`);
+
+  // Requested palette
+  const COLORS = {
+    0: "var(--termoweb-cold-color, #00BCD4)",  // Cold -> Cyan
+    1: "var(--termoweb-night-color, #0D47A1)", // Night -> Dark Blue
+    2: "var(--termoweb-day-color, #FB8C00)",   // Day -> Orange
+    border: "var(--divider-color, rgba(255,255,255,0.12))",
+    cellBg: "var(--card-background-color, #1f1f1f)",
+    label: "var(--secondary-text-color, #9e9e9e)",
+    text: "var(--primary-text-color, #e0e0e0)",
+    subtext: "var(--secondary-text-color, #a0a0a0)",
+  };
+
+  // Card picker registration
+  window.customCards = window.customCards || [];
+  window.customCards.push({
+    type: "termoweb-schedule-card",
+    name: "TermoWeb Schedule",
+    description: "Edit the weekly schedule and presets of a TermoWeb heater",
+    preview: false,
+  });
+
+  const nowMs = () => Date.now();
+  const deepEqArray = (a, b) => {
+    if (a === b) return true;
+    if (!Array.isArray(a) || !Array.isArray(b)) return false;
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+    return true;
+  };
 
   class TermoWebScheduleCard extends HTMLElement {
-    static getConfigElement() { return document.createElement("hui-generic-entity-row"); }
-    static getStubConfig() { return { entity: "climate.some_heater" }; }
+    constructor() {
+      super();
+      this.attachShadow({ mode: "open" });
+      this._hass = null;
+      this._config = null;
+      this._stateObj = null;
+
+      // Local working copies
+      this._progLocal = null;        // int[168]
+      this._ptempLocal = [null, null, null]; // [cold, night, day]
+
+      // Dirty flags (user edited)
+      this._dirtyProg = false;
+      this._dirtyPresets = false;
+
+      // Freeze window: ignore hass updates while editing / just after save
+      this._freezeUntil = 0; // epoch ms; 0 means not frozen
+      this._freezeWindowMs = 15000; // 15s after save
+
+      // Last-sent payloads to detect echo
+      this._lastSent = { prog: null, ptemp: null };
+
+      // painting
+      this._dragging = false;
+      this._paintValue = null;
+      this._boundMouseUp = () => this._onMouseUp();
+    }
 
     setConfig(config) {
-      if (!config || !config.entity) throw new Error("Required config: entity");
+      if (!config || !config.entity) {
+        throw new Error("termoweb-schedule-card: 'entity' is required");
+      }
       this._config = config;
-      if (!this.shadowRoot) this.attachShadow({ mode: "open" });
-      this._selected = 2;          // default paint state: day
-      this._dragging = false;
-      this._prog = null;           // working copy
-      this._origProg = null;       // last state from HA
-      this._ptemp = null;
-      this._entity = null;
-      this._saving = false;
       this._render();
     }
 
     set hass(hass) {
       this._hass = hass;
       if (!this._config) return;
+
       const st = hass.states[this._config.entity];
-      if (!st) return;
-      this._entity = st;
-      const attrs = st.attributes || {};
-      const prog = Array.isArray(attrs.prog) ? attrs.prog.map((v) => parseInt(v)) : null;
-      const ptemp = Array.isArray(attrs.ptemp) ? attrs.ptemp.map((v) => parseFloat(v)) : null;
+      this._stateObj = st || null;
 
-      let shouldRender = false;
+      const canHydrateNow = this._canHydrateFromState();
+      const attrs = st?.attributes || {};
 
-      if (prog && prog.length === 168 && prog.every((x) => VALID.has(Number(x)))) {
-        const key = prog.join(",");
-        if (!this._origProg || this._origProg.join(",") !== key) {
-          this._origProg = prog.slice();
-          if (!this._prog || this._saving === false) {
-            // if not in the middle of saving, sync working copy
-            this._prog = prog.slice();
-            shouldRender = true;
+      if (canHydrateNow) {
+        // Prog
+        if (Array.isArray(attrs.prog) && attrs.prog.length === 168) {
+          // If we were waiting for echo and it matches last sent, unfreeze.
+          if (this._lastSent.prog && deepEqArray(attrs.prog, this._lastSent.prog)) {
+            this._freezeUntil = 0;
           }
+          this._progLocal = attrs.prog.slice();
+        }
+        // Presets
+        if (Array.isArray(attrs.ptemp) && attrs.ptemp.length === 3) {
+          if (this._lastSent.ptemp && deepEqArray(attrs.ptemp, this._lastSent.ptemp)) {
+            this._freezeUntil = 0;
+          }
+          this._ptempLocal = attrs.ptemp.slice();
         }
       }
-
-      if (ptemp && ptemp.length === 3) {
-        if (!this._ptemp || this._ptemp.join(",") !== ptemp.join(",")) {
-          this._ptemp = ptemp.slice();
-          shouldRender = true;
-        }
-      }
-
-      if (shouldRender) this._render();
-    }
-
-    getCardSize() { return 8; }
-
-    _hourLabel(h) { return (h < 10 ? "0" + h : "" + h) + ":00"; }
-
-    _render() {
-      if (!this.shadowRoot) return;
-      const style = `
-        :host { display: block; }
-        .wrap { padding: 12px; }
-        .hdr { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
-        .legend { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-        .legend button { border: 1px solid var(--divider-color); padding: 6px 10px; border-radius: 8px; cursor: pointer; background: transparent; }
-        .legend button.sel { border-width: 2px; }
-        .grid { display: grid; grid-template-columns: 64px repeat(7, 1fr); gap: 4px; }
-        .cell { height: 26px; border-radius: 6px; background: var(--ha-card-background, #1c1c1c); display: flex; align-items: center; justify-content: center; cursor: pointer; border: 1px solid var(--divider-color); user-select: none; }
-        .hour { text-align: right; padding-right: 8px; font-size: 12px; align-self: center; }
-        .dayhdr { font-weight: 600; text-align: center; font-size: 12px; }
-        .c0 { background: rgba(130,160,255,0.25); }
-        .c1 { background: rgba(255,180,0,0.25); }
-        .c2 { background: rgba(0,200,120,0.25); }
-        .btns { display: flex; gap: 8px; justify-content: flex-end; margin-top: 10px; }
-        .btn { padding: 6px 10px; border-radius: 8px; border: 1px solid var(--divider-color); cursor: pointer; background: transparent; }
-        .btn[disabled] { opacity: .6; cursor: default; }
-        .muted { opacity: .75; }
-      `;
-
-      const title = this._config.title || (this._entity && this._entity.attributes.friendly_name) || "Schedule";
-      const prog = (this._prog && this._prog.length === 168) ? this._prog.slice() : new Array(168).fill(0);
-      const ptemp = (this._ptemp && this._ptemp.length === 3) ? this._ptemp.slice() : [10, 20, 22];
-
-      const makeDayHdr = () => {
-        const hdr = document.createElement("div");
-        hdr.className = "grid";
-        hdr.appendChild(document.createElement("div")); // corner
-        for (let d = 0; d < 7; d++) {
-          const el = document.createElement("div");
-          el.className = "dayhdr";
-          el.textContent = DAYS[d];
-          hdr.appendChild(el);
-        }
-        return hdr;
-      };
-
-      const grid = document.createElement("div");
-      grid.className = "grid";
-
-      for (let h = 0; h < 24; h++) {
-        const hour = document.createElement("div");
-        hour.className = "hour";
-        hour.textContent = this._hourLabel(h);
-        grid.appendChild(hour);
-
-        for (let d = 0; d < 7; d++) {
-          const idx = d * 24 + h; // Monday-based indexing
-          const v = Number(prog[idx] ?? 0);
-          const cell = document.createElement("div");
-          cell.dataset.idx = String(idx);
-          cell.className = `cell c${v}`;
-          cell.title = `${DAYS[d]} ${this._hourLabel(h)} → ${LABELS[v]} (${Number.isFinite(ptemp[v]) ? ptemp[v].toFixed(1) : ptemp[v]}°C)`;
-          cell.addEventListener("mousedown", () => { this._dragging = true; this._paintCell(cell); });
-          cell.addEventListener("mouseenter", () => { if (this._dragging) this._paintCell(cell); });
-          cell.addEventListener("mouseup", () => { this._dragging = false; });
-          cell.addEventListener("click", () => { this._paintCell(cell); });
-          grid.appendChild(cell);
-        }
-      }
-      document.addEventListener("mouseup", () => { this._dragging = false; });
-
-      const legend = document.createElement("div");
-      legend.className = "legend";
-      const mkBtn = (label, idx, temp) => {
-        const b = document.createElement("button");
-        b.textContent = `${label} ${Number.isFinite(temp) ? temp.toFixed(1) : temp}°C`;
-        if (this._selected === idx) b.classList.add("sel");
-        b.addEventListener("click", () => { this._selected = idx; this._render(); });
-        return b;
-      };
-      legend.appendChild(mkBtn(LABELS[0], 0, ptemp[0]));
-      legend.appendChild(mkBtn(LABELS[1], 1, ptemp[1]));
-      legend.appendChild(mkBtn(LABELS[2], 2, ptemp[2]));
-
-      const btns = document.createElement("div");
-      btns.className = "btns";
-      const revert = document.createElement("button");
-      revert.className = "btn";
-      revert.textContent = "Revert";
-      revert.addEventListener("click", () => { if (this._origProg) { this._prog = this._origProg.slice(); this._render(); } });
-      const save = document.createElement("button");
-      save.className = "btn";
-      save.textContent = this._saving ? "Saving..." : "Save";
-      save.disabled = this._saving;
-      save.addEventListener("click", () => this._save());
-      btns.appendChild(revert);
-      btns.appendChild(save);
-
-      const root = document.createElement("div");
-      root.className = "wrap";
-      root.innerHTML = `<style>${style}</style><div class="hdr"><div>${title}</div><div class="muted">${this._config.entity}</div></div>`;
-      root.appendChild(makeDayHdr());
-      root.appendChild(grid);
-      root.appendChild(legend);
-      root.appendChild(btns);
-
-      this.shadowRoot.innerHTML = "";
-      this.shadowRoot.appendChild(root);
-    }
-
-    _paintCell(cell) {
-      if (!cell || !this._prog) return;
-      const idx = parseInt(cell.dataset.idx, 10);
-      if (!Number.isInteger(idx) || idx < 0 || idx >= 168) return;
-      this._prog[idx] = this._selected;
-      cell.className = `cell c${this._selected}`;
-    }
-
-    async _save() {
-      if (!this._hass || !this._config || !Array.isArray(this._prog) || this._prog.length !== 168) return;
-      // Validate contents
-      for (let i = 0; i < 168; i++) {
-        const v = Number(this._prog[i]);
-        if (!VALID.has(v)) return;
-      }
-      this._saving = true;
+      // Re-render regardless (for header / unit changes)
       this._render();
+    }
+
+    _canHydrateFromState() {
+      // Only hydrate when:
+      // - No local copy yet (first load)
+      // - Not currently dirty
+      // - Not within freeze window
+      const now = nowMs();
+      const inFreeze = now < this._freezeUntil;
+      const hasLocal = Array.isArray(this._progLocal) && this._progLocal.length === 168;
+      if (!hasLocal) return true;
+      if (this._dirtyProg || this._dirtyPresets) return false;
+      if (inFreeze) return false;
+      return true;
+    }
+
+    getCardSize() { return 16; }
+
+    // ---------- helpers ----------
+    _units() {
+      const u = this._stateObj?.attributes?.units;
+      return (u === "F" || u === "C") ? u : "C";
+    }
+    _idx(day, hour) { return day * 24 + hour; }
+    _cycle(v) { return (v + 1) % 3; }
+    _toast(msg) {
+      const el = document.createElement("div");
+      el.textContent = msg;
+      el.style.cssText =
+        "position:fixed;left:50%;bottom:16px;transform:translateX(-50%);background:rgba(0,0,0,0.75);color:#fff;padding:8px 12px;border-radius:6px;z-index:9999;font-size:12px;";
+      document.body.appendChild(el);
+      setTimeout(() => el.remove(), 1800);
+    }
+
+    // ---------- schedule interaction ----------
+    _onCellClick(day, hour) {
+      if (!this._progLocal) return;
+      const i = this._idx(day, hour);
+      this._progLocal[i] = this._cycle(Number(this._progLocal[i] || 0));
+      this._dirtyProg = true;
+      this._renderGridOnly();
+    }
+    _onMouseDown(day, hour) {
+      if (!this._progLocal) return;
+      this._dragging = true;
+      const i = this._idx(day, hour);
+      const next = this._cycle(Number(this._progLocal[i] || 0));
+      this._paintValue = next;
+      this._progLocal[i] = next;
+      this._dirtyProg = true;
+      window.addEventListener("mouseup", this._boundMouseUp, { once: true });
+      this._renderGridOnly();
+    }
+    _onMouseOver(day, hour) {
+      if (!this._dragging || this._paintValue == null || !this._progLocal) return;
+      const i = this._idx(day, hour);
+      if (this._progLocal[i] !== this._paintValue) {
+        this._progLocal[i] = this._paintValue;
+        this._dirtyProg = true;
+        this._colorCell(day, hour, this._paintValue);
+      }
+    }
+    _onMouseUp() { this._dragging = false; this._paintValue = null; }
+
+    _revert() {
+      // Force re-hydrate from current HA state
+      const st = this._hass?.states?.[this._config.entity];
+      const attrs = st?.attributes || {};
+      if (Array.isArray(attrs.prog) && attrs.prog.length === 168) {
+        this._progLocal = attrs.prog.slice();
+      }
+      if (Array.isArray(attrs.ptemp) && attrs.ptemp.length === 3) {
+        this._ptempLocal = attrs.ptemp.slice();
+      }
+      this._dirtyProg = false;
+      this._dirtyPresets = false;
+      this._freezeUntil = 0;
+      this._lastSent = { prog: null, ptemp: null };
+      this._render();
+    }
+
+    _refreshFromState() {
+      // Manual refresh, ignoring freeze; useful if user wants to sync now
+      const st = self._hass?.states?.[this._config.entity];
+      const attrs = st?.attributes || {};
+      if (Array.isArray(attrs.prog) && attrs.prog.length === 168) {
+        this._progLocal = attrs.prog.slice();
+      }
+      if (Array.isArray(attrs.ptemp) && attrs.ptemp.length === 3) {
+        this._ptempLocal = attrs.ptemp.slice();
+      }
+      this._dirtyProg = false;
+      this._dirtyPresets = false;
+      this._freezeUntil = 0;
+      this._render();
+    }
+
+    // ---------- preset editing ----------
+    _parseInputNum(id) {
+      const el = this.shadowRoot.getElementById(id);
+      if (!el) return null;
+      const n = Number(el.value);
+      return Number.isFinite(n) ? n : null;
+    }
+
+    async _savePresets() {
+      if (!this._hass || !this._config) return;
+      const cold = this._parseInputNum("tw_p_cold");
+      const night = this._parseInputNum("tw_p_night");
+      const day = this._parseInputNum("tw_p_day");
+      if (cold == null || night == null || day == null) {
+        this._toast("Enter valid numbers for Cold / Night / Day");
+        return;
+      }
+      const payload = [cold, night, day];
+      try {
+        await this._hass.callService("termoweb", "set_preset_temperatures", {
+          entity_id: this._config.entity,
+          ptemp: payload.slice(),
+        });
+        this._ptempLocal = payload.slice();
+        this._dirtyPresets = false;
+        this._lastSent.ptemp = payload.slice();
+        this._freezeUntil = nowMs() + this._freezeWindowMs;
+        this._toast("Preset temperatures sent (waiting for device to update)");
+      } catch (e) {
+        this._toast("Failed to save presets");
+        console.error("TermoWeb card: set_preset_temperatures error:", e);
+      }
+    }
+
+    // ---------- save schedule ----------
+    async _saveSchedule() {
+      if (!this._hass || !this._config || !this._progLocal) return;
+
+      if (!Array.isArray(this._progLocal) || this._progLocal.length !== 168) {
+        this._toast("Invalid program (expected 168 values)");
+        return;
+      }
+      for (const v of this._progLocal) {
+        if (v !== 0 && v !== 1 && v !== 2) {
+          this._toast("Program has invalid values (allowed: 0,1,2)");
+          return;
+        }
+      }
+
+      const body = this._progLocal.slice();
       try {
         await this._hass.callService("termoweb", "set_schedule", {
           entity_id: this._config.entity,
-          prog: this._prog,
+          prog: body,
         });
+        this._dirtyProg = false;
+        this._lastSent.prog = body.slice();
+        this._freezeUntil = nowMs() + this._freezeWindowMs;
+        this._toast("Schedule sent (waiting for device to update)");
       } catch (e) {
-        // eslint-disable-next-line no-console
-        console.error("termoweb-schedule: save failed", e);
-      } finally {
-        this._saving = false;
-        this._render();
+        this._toast("Failed to save schedule");
+        console.error("TermoWeb card: set_schedule error:", e);
       }
     }
+
+    // ---------- render ----------
+    _render() {
+      const root = this.shadowRoot;
+      if (!root) return;
+
+      const title =
+        (this._stateObj?.attributes?.friendly_name || this._stateObj?.attributes?.name) ||
+        this._config?.entity || "TermoWeb schedule";
+
+      const hasProg = Array.isArray(this._progLocal) && this._progLocal.length === 168;
+      const units = this._units();
+      const stepAttr = units === "F" ? "1" : "0.5";
+      const [cold, night, day] = this._ptempLocal ?? [null, null, null];
+
+      const dirtyBadge = (this._dirtyProg || this._dirtyPresets) ?
+        `<span class="dirty">● unsaved</span>` : ``;
+
+      const frozen = nowMs() < this._freezeUntil;
+
+      root.innerHTML = `
+        <style>
+          :host { display:block; }
+          .card { padding: 12px; color: ${COLORS.text}; }
+          .header { display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;font-weight:600; }
+          .sub { color: ${COLORS.subtext}; font-size: 12px; display:flex; align-items:center; gap:8px; }
+          .dirty { color: var(--warning-color, #ffa000); font-size: 11px; }
+          .grid { display: grid; grid-template-columns: 56px repeat(7, 1fr); gap: 6px; margin-top: 8px; }
+          .hour { color: ${COLORS.label}; font-size: 12px; text-align: right; padding: 4px 6px; }
+          .dayhdr { color: ${COLORS.label}; font-size: 12px; text-align: center; padding: 4px 0 8px 0; }
+          .cell { background: ${COLORS.cellBg}; border: 1px solid ${COLORS.border}; height: 20px; border-radius: 6px; cursor: pointer; transition: filter .06s; }
+          .cell:hover { filter: brightness(1.08); }
+          .legend { display:flex;gap:12px;align-items:center;flex-wrap:wrap;color:${COLORS.label}; font-size: 12px; }
+          .legend .swatch { display:inline-block;width:14px;height:14px;border-radius:4px;border:1px solid ${COLORS.border};vertical-align:-2px;margin-right:6px; }
+          .row { display:flex; gap:10px; align-items:center; margin-top:10px; flex-wrap: wrap; color:${COLORS.label}; }
+          input[type="number"] {
+            width: 72px;
+            border-radius: 8px;
+            border: 1px solid ${COLORS.border};
+            background: var(--secondary-background-color, #2b2b2b);
+            color: ${COLORS.text};
+            padding: 5px 8px;
+          }
+          .footer { display:flex;justify-content:flex-end;gap:8px;margin-top:10px; flex-wrap: wrap; }
+          button { background: var(--secondary-background-color, #2b2b2b); color: ${COLORS.text}; border: 1px solid ${COLORS.border}; border-radius: 8px; padding: 6px 10px; font-size: 12px; cursor: pointer; }
+          button:hover { filter: brightness(1.1); }
+          .warn { color: var(--error-color, #ef5350); }
+          .chip { padding:2px 6px; border:1px solid ${COLORS.border}; border-radius: 10px; font-size:11px; }
+        </style>
+
+        <ha-card class="card">
+          <div class="header">
+            <div>${title}</div>
+            <div class="sub">
+              ${this._config?.entity ?? ""}
+              ${dirtyBadge}
+              ${frozen ? `<span class="chip">waiting for device update…</span>` : ``}
+              <button id="refreshBtn" title="Refresh from current state">Refresh</button>
+            </div>
+          </div>
+
+          <!-- Legend -->
+          <div class="legend">
+            <span><span class="swatch" style="background:${COLORS[0]}"></span>Cold</span>
+            <span><span class="swatch" style="background:${COLORS[2]}"></span>Day</span>
+            <span><span class="swatch" style="background:${COLORS[1]}"></span>Night</span>
+            <span>Units: ${units}</span>
+          </div>
+
+          <!-- Preset editors -->
+          <div class="row">
+            <label>Cold <input id="tw_p_cold" type="number" step="${stepAttr}" value="${cold ?? ""}"></label>
+            <label>Night <input id="tw_p_night" type="number" step="${stepAttr}" value="${night ?? ""}"></label>
+            <label>Day <input id="tw_p_day" type="number" step="${stepAttr}" value="${day ?? ""}"></label>
+            <button id="savePresetsBtn">Save Presets</button>
+          </div>
+
+          ${!hasProg ? `<div class="warn" style="margin-top:8px;">This entity has no valid 'prog' (expected 168 ints).</div>` : ""}
+
+          ${this._renderGridShell()}
+
+          <div class="footer">
+            <button id="revertBtn">Revert</button>
+            <button id="saveBtn">Save</button>
+          </div>
+        </ha-card>
+      `;
+
+      // Bind Refresh
+      root.getElementById("refreshBtn")?.addEventListener("click", () => this._refreshFromState());
+
+      // Bind preset inputs to set dirty flag
+      root.getElementById("tw_p_cold")?.addEventListener("input", () => { this._dirtyPresets = true; });
+      root.getElementById("tw_p_night")?.addEventListener("input", () => { this._dirtyPresets = true; });
+      root.getElementById("tw_p_day")?.addEventListener("input", () => { this._dirtyPresets = true; });
+
+      // Bind preset save
+      root.getElementById("savePresetsBtn")?.addEventListener("click", () => this._savePresets());
+
+      // Bind schedule buttons
+      root.getElementById("revertBtn")?.addEventListener("click", () => this._revert());
+      root.getElementById("saveBtn")?.addEventListener("click", () => this._saveSchedule());
+
+      // Paint cells
+      this._renderGridOnly();
+    }
+
+    _renderGridShell() {
+      // header row
+      let headerRow = `<div></div>`;
+      for (let d = 0; d < 7; d++) headerRow += `<div class="dayhdr">${DAY_NAMES[d]}</div>`;
+
+      // body rows (24 hours × 7 days)
+      let rows = "";
+      for (let h = 0; h < 24; h++) {
+        rows += `<div class="hour">${HOUR_LABELS[h]}</div>`;
+        for (let d = 0; d < 7; d++) {
+          rows += `<div class="cell" data-d="${d}" data-h="${h}"></div>`;
+        }
+      }
+      return `<div class="grid">${headerRow}${rows}</div>`;
+    }
+
+    _renderGridOnly() {
+      const root = this.shadowRoot;
+      if (!root) return;
+      const cells = root.querySelectorAll(".cell");
+      if (!cells || !this._progLocal || this._progLocal.length !== 168) return;
+
+      cells.forEach((cell) => {
+        const d = Number(cell.getAttribute("data-d"));
+        const h = Number(cell.getAttribute("data-h"));
+        const idx = this._idx(d, h);
+        const v = Number(this._progLocal[idx] ?? 0);
+
+        cell.style.background = COLORS[v in COLORS ? v : 0];
+
+        if (!cell._twBound) {
+          cell._twBound = true;
+          cell.addEventListener("click", () => this._onCellClick(d, h));
+          cell.addEventListener("mousedown", () => this._onMouseDown(d, h));
+          cell.addEventListener("mouseover", () => this._onMouseOver(d, h));
+        }
+      });
+    }
+
+    _colorCell(day, hour, v) {
+      const root = this.shadowRoot;
+      const el = root && root.querySelector(`.cell[data-d="${day}"][data-h="${hour}"]`);
+      if (el) el.style.background = COLORS[v in COLORS ? v : 0];
+    }
+
+    static getConfigElement() { return null; }
   }
 
-  if (!customElements.get(CARD_TAG)) {
-    customElements.define(CARD_TAG, TermoWebScheduleCard);
-  }
-
-  // Optional: register metadata for some dashboards
-  window.customCards = window.customCards || [];
-  const exists = window.customCards.some((c) => c.type === CARD_TAG);
-  if (!exists) {
-    window.customCards.push({
-      type: CARD_TAG,
-      name: "TermoWeb Schedule Card",
-      description: "Edit the weekly 7x24 tri-state (Cold/Night/Day) schedule for a TermoWeb heater.",
-      preview: false,
-    });
-  }
+  customElements.define("termoweb-schedule-card", TermoWebScheduleCard);
 })();
