@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from homeassistant.components.binary_sensor import BinarySensorEntity, BinarySensorDeviceClass
+import logging
 from homeassistant.core import callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -14,18 +15,18 @@ from .coordinator import TermoWebCoordinator
 async def async_setup_entry(hass, entry, async_add_entities):
     coord: TermoWebCoordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
     added_ids: set[str] = hass.data[DOMAIN][entry.entry_id].setdefault("added_binary_ids", set())
+    _logger = logging.getLogger(__name__)
 
     @callback
-    def _add_entities():
+    def _add_entities() -> None:
         """Add binary sensor entities for newly discovered devices.
 
-        Wrap entity instantiation in a try/except block so that a faulty
-        device does not abort the entire setup process. If a single entity
-        raises an exception during construction, the error is logged and the
-        entity is skipped. Without this guard Home Assistant will log
-        "Error adding entity None" when any unexpected exception bubbles up.
+        Each entity is constructed and added individually. Exceptions during
+        construction or addition are caught and logged to ensure that a
+        problematic device does not abort the entire setup. Without this
+        defensive logic, Home Assistant will emit generic "Error adding entity
+        None" messages when an entity raises during initialisation.
         """
-        new_entities = []
         for dev_id, data in (coord.data or {}).items():
             uid = f"{dev_id}_online"
             if uid in added_ids:
@@ -33,14 +34,14 @@ async def async_setup_entry(hass, entry, async_add_entities):
             try:
                 ent = TermoWebDeviceOnlineBinarySensor(coord, entry.entry_id, dev_id)
             except Exception as exc:
-                import logging
-                logger = logging.getLogger(__name__)
-                logger.error("Failed to create binary sensor for dev_id=%s: %s", dev_id, exc)
+                _logger.error("Failed to create binary sensor for dev_id=%s: %s", dev_id, exc)
                 continue
-            new_entities.append(ent)
+            try:
+                async_add_entities([ent])
+            except Exception as exc:
+                _logger.error("Failed to add binary sensor for dev_id=%s: %s", dev_id, exc)
+                continue
             added_ids.add(uid)
-        if new_entities:
-            async_add_entities(new_entities)
 
     coord.async_add_listener(_add_entities)
     if coord.data:

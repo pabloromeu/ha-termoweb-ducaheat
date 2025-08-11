@@ -17,6 +17,7 @@ from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
 from homeassistant.helpers import entity_platform
+from homeassistant.helpers import config_validation as cv
 import voluptuous as vol
 
 from .const import DOMAIN, signal_ws_data
@@ -76,30 +77,29 @@ async def async_setup_entry(hass, entry, async_add_entities):
     # climate.set_schedule
     platform.async_register_entity_service(
         "set_schedule",
-        vol.Schema({
+        {
             vol.Required("prog"): vol.All(
                 [vol.All(int, vol.In([0, 1, 2]))],
                 vol.Length(min=168, max=168),
             )
-        }),
+        },
         "async_set_schedule",
     )
 
     # climate.set_preset_temperatures
+    # Use a plain dict for the schema to allow Home Assistant to wrap it
+    # automatically into an entity service schema. Accept either a 3‑element
+    # ptemp list or individual cold/night/day floats. Validation of presence
+    # and consistency is handled in async_set_preset_temperatures().
+    preset_schema = {
+        vol.Optional("ptemp"): vol.All([vol.Coerce(float)], vol.Length(min=3, max=3)),
+        vol.Optional("cold"): vol.Coerce(float),
+        vol.Optional("night"): vol.Coerce(float),
+        vol.Optional("day"): vol.Coerce(float),
+    }
     platform.async_register_entity_service(
         "set_preset_temperatures",
-        vol.Schema(
-            vol.Any(
-                {
-                    vol.Required("ptemp"): vol.All([vol.Coerce(float)], vol.Length(min=3, max=3))
-                },
-                {
-                    vol.Required("cold"): vol.Coerce(float),
-                    vol.Required("night"): vol.Coerce(float),
-                    vol.Required("day"): vol.Coerce(float),
-                },
-            )
-        ),
+        preset_schema,
         "async_set_preset_temperatures",
     )
 
