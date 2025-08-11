@@ -191,7 +191,7 @@
       this._saving = true;
       this._render();
       try {
-        await this._hass.callService("climate", "set_schedule", {
+        await this._hass.callService("termoweb", "set_schedule", {
           entity_id: this._config.entity,
           prog: this._prog,
         });
