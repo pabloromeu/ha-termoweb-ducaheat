@@ -76,12 +76,12 @@ async def async_setup_entry(hass, entry, async_add_entities):
     # climate.set_schedule
     platform.async_register_entity_service(
         "set_schedule",
-        {
+        vol.Schema({
             vol.Required("prog"): vol.All(
                 [vol.All(int, vol.In([0, 1, 2]))],
                 vol.Length(min=168, max=168),
             )
-        },
+        }),
         "async_set_schedule",
     )
 
@@ -90,7 +90,9 @@ async def async_setup_entry(hass, entry, async_add_entities):
         "set_preset_temperatures",
         vol.Schema(
             vol.Any(
-                {vol.Required("ptemp"): vol.All([vol.Coerce(float)], vol.Length(min=3, max=3))},
+                {
+                    vol.Required("ptemp"): vol.All([vol.Coerce(float)], vol.Length(min=3, max=3))
+                },
                 {
                     vol.Required("cold"): vol.Coerce(float),
                     vol.Required("night"): vol.Coerce(float),

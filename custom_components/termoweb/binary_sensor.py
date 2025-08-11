@@ -17,12 +17,27 @@ async def async_setup_entry(hass, entry, async_add_entities):
 
     @callback
     def _add_entities():
+        """Add binary sensor entities for newly discovered devices.
+
+        Wrap entity instantiation in a try/except block so that a faulty
+        device does not abort the entire setup process. If a single entity
+        raises an exception during construction, the error is logged and the
+        entity is skipped. Without this guard Home Assistant will log
+        "Error adding entity None" when any unexpected exception bubbles up.
+        """
         new_entities = []
         for dev_id, data in (coord.data or {}).items():
             uid = f"{dev_id}_online"
             if uid in added_ids:
                 continue
-            new_entities.append(TermoWebDeviceOnlineBinarySensor(coord, entry.entry_id, dev_id))
+            try:
+                ent = TermoWebDeviceOnlineBinarySensor(coord, entry.entry_id, dev_id)
+            except Exception as exc:
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.error("Failed to create binary sensor for dev_id=%s: %s", dev_id, exc)
+                continue
+            new_entities.append(ent)
             added_ids.add(uid)
         if new_entities:
             async_add_entities(new_entities)
