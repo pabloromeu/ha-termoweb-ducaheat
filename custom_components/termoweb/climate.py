@@ -11,7 +11,7 @@ from homeassistant.components.climate import (
     ClimateEntityFeature,
 )
 from homeassistant.const import UnitOfTemperature, ATTR_TEMPERATURE
-from homeassistant.core import callback
+from homeassistant.core import callback, ServiceCall
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -74,7 +74,32 @@ async def async_setup_entry(hass, entry, async_add_entities):
     # -------------------- Register entity services --------------------
     platform = entity_platform.async_get_current_platform()
 
-    # climate.set_schedule
+    # Explicit callables ensure dispatch and let us add clear logs when invoked.
+    async def _svc_set_schedule(entity: "TermoWebHeater", call: ServiceCall) -> None:
+        prog = call.data.get("prog")
+        _LOGGER.info(
+            "entity-service termoweb.set_schedule -> %s prog_len=%s",
+            getattr(entity, "entity_id", "<no-entity-id>"),
+            len(prog) if isinstance(prog, list) else "<invalid>",
+        )
+        await entity.async_set_schedule(prog)
+
+    async def _svc_set_preset_temperatures(entity: "TermoWebHeater", call: ServiceCall) -> None:
+        if "ptemp" in call.data:
+            args = {"ptemp": call.data.get("ptemp")}
+        else:
+            args = {
+                "cold": call.data.get("cold"),
+                "night": call.data.get("night"),
+                "day": call.data.get("day"),
+            }
+        _LOGGER.info(
+            "entity-service termoweb.set_preset_temperatures -> %s",
+            getattr(entity, "entity_id", "<no-entity-id>"),
+        )
+        await entity.async_set_preset_temperatures(**args)
+
+    # termoweb.set_schedule
     platform.async_register_entity_service(
         "set_schedule",
         {
@@ -83,14 +108,10 @@ async def async_setup_entry(hass, entry, async_add_entities):
                 vol.Length(min=168, max=168),
             )
         },
-        "async_set_schedule",
+        _svc_set_schedule,
     )
 
-    # climate.set_preset_temperatures
-    # Use a plain dict for the schema to allow Home Assistant to wrap it
-    # automatically into an entity service schema. Accept either a 3‑element
-    # ptemp list or individual cold/night/day floats. Validation of presence
-    # and consistency is handled in async_set_preset_temperatures().
+    # termoweb.set_preset_temperatures
     preset_schema = {
         vol.Optional("ptemp"): vol.All([vol.Coerce(float)], vol.Length(min=3, max=3)),
         vol.Optional("cold"): vol.Coerce(float),
@@ -100,7 +121,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
     platform.async_register_entity_service(
         "set_preset_temperatures",
         preset_schema,
-        "async_set_preset_temperatures",
+        _svc_set_preset_temperatures,
     )
 
 
