@@ -4,9 +4,9 @@
 - Use Python 3.11 and type hints for all new code.
 
 - For each commit or task, make the absolute MINIMAL SURGICAL changes and only directly related to the task at hand.
-- Do not make changes to parts of the code that are unrelated to your current task
-- Keep imports sorted using `ruff --select I --fix` or a similar tool.
 - Run tests with `pytest` and make sure they pass before committing.
+- Do not make changes to parts of the code that are unrelated to your current task
+- If given a formatting task sort imports using `ruff --select I --fix` or a similar tool.
 - If given a formatting task format with [Black](https://black.readthedocs.io/en/stable/) and lint with [Ruff](https://docs.astral.sh/ruff/).
 - Do not make formatting changes unless explicitly asked.
 
