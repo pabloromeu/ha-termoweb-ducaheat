@@ -131,7 +131,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    rec = hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
+    domain_data = hass.data.get(DOMAIN)
+    rec = domain_data.get(entry.entry_id) if domain_data else None
     if not rec:
         return True
 
@@ -154,7 +155,11 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if "unsub_ws_status" in rec and callable(rec["unsub_ws_status"]):
         rec["unsub_ws_status"]()
 
-    ok = await hass.config_entries.async_unload_platforms(entry, ["button", "binary_sensor", "climate", "sensor"])
+    ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+
+    if ok and domain_data:
+        domain_data.pop(entry.entry_id, None)
+
     return ok
 
 
