@@ -17,20 +17,6 @@ _LOGGER = logging.getLogger(__name__)
 HTR_SETTINGS_PER_CYCLE = 1
 
 
-def _as_float(val: Any) -> Optional[float]:
-    try:
-        if val is None:
-            return None
-        if isinstance(val, (int, float)):
-            return float(val)
-        s = str(val).strip()
-        if not s:
-            return None
-        return float(s)
-    except Exception:
-        return None
-
-
 class TermoWebCoordinator(DataUpdateCoordinator[Dict[str, Dict[str, Any]]]):  # dev_id -> per-device data
     """Polls TermoWeb and exposes a per-device dict used by platforms."""
 
