@@ -193,8 +193,10 @@ def test_get_pmo_power_url() -> None:
         await client.get_pmo_power("d1", "2")
         client._request.assert_called_once()
         method, path = client._request.call_args[0][:2]
+        kwargs = client._request.call_args[1]
         assert method == "GET"
         assert path == "/api/v2/devs/d1/pmo/2/power"
+        assert kwargs.get("ignore_statuses") == {404}
 
     asyncio.run(_run())
 
@@ -210,7 +212,7 @@ def test_ws_event_updates_sensor() -> None:
             }
         }
         client = MagicMock()
-        client.get_pmo_power = AsyncMock(return_value={"power": 5})
+        client.get_pmo_power = AsyncMock(return_value=5)
         coord = TermoWebPmoPowerCoordinator(hass, client, base, "entry")
         await coord.async_config_entry_first_refresh()
         assert coord.data["dev1"]["pmo"]["power"]["1"] == 5.0
@@ -244,7 +246,7 @@ def test_ws_event_updates_sensor_string_power() -> None:
             }
         }
         client = MagicMock()
-        client.get_pmo_power = AsyncMock(return_value={"power": "5"})
+        client.get_pmo_power = AsyncMock(return_value="5")
         coord = TermoWebPmoPowerCoordinator(hass, client, base, "entry")
         await coord.async_config_entry_first_refresh()
         assert coord.data["dev1"]["pmo"]["power"]["1"] == 5.0
@@ -266,7 +268,7 @@ def test_entity_registration() -> None:
                 "nodes": {"nodes": [{"type": "pmo", "addr": "1", "name": "PMO"}]}
             }
         }
-        data["client"].get_pmo_power = AsyncMock(return_value={"power": 0})
+        data["client"].get_pmo_power = AsyncMock(return_value=0)
         data["coordinator"].async_add_listener = MagicMock()
         hass.data.setdefault(DOMAIN, {})[entry.entry_id] = data
 
@@ -277,5 +279,32 @@ def test_entity_registration() -> None:
 
         await sensor_mod.async_setup_entry(hass, entry, _add)
         assert any(isinstance(ent, sensor_mod.TermoWebPmoPower) for ent in added)
+
+    asyncio.run(_run())
+
+
+def test_coordinator_skips_unsupported() -> None:
+    async def _run() -> None:
+        hass = HomeAssistant()
+        base = MagicMock()
+        base.data = {
+            "dev1": {
+                "nodes": {
+                    "nodes": [
+                        {"type": "pmo", "addr": "1"},
+                        {"type": "pmo", "addr": "2"},
+                    ]
+                }
+            }
+        }
+        client = MagicMock()
+        client.get_pmo_power = AsyncMock(side_effect=[None, 1.0, 2.0])
+        coord = TermoWebPmoPowerCoordinator(hass, client, base, "entry")
+        await coord._async_update_data()
+        assert client.get_pmo_power.call_count == 2
+        assert ("dev1", "1") in coord._unsupported
+        await coord._async_update_data()
+        assert client.get_pmo_power.call_count == 3
+        assert client.get_pmo_power.call_args_list[2][0] == ("dev1", "2")
 
     asyncio.run(_run())

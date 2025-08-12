@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 import aiohttp
 
@@ -59,12 +59,20 @@ class TermoWebClient:
         self._token_expiry: float = 0.0
         self._lock = asyncio.Lock()
 
-    async def _request(self, method: str, path: str, **kwargs) -> Any:
+    async def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        ignore_statuses: Iterable[int] = (),
+        **kwargs,
+    ) -> Any:
         """
         Perform an HTTP request; return JSON when possible, else text.
         Errors are logged WITHOUT secrets; callers receive raised exceptions.
         """
         headers = kwargs.pop("headers", {})
+        ignore_statuses = set(ignore_statuses)
         headers.setdefault("User-Agent", USER_AGENT)
         headers.setdefault("Accept-Language", ACCEPT_LANGUAGE)
         timeout = kwargs.pop("timeout", aiohttp.ClientTimeout(total=25))
@@ -86,7 +94,12 @@ class TermoWebClient:
 
                     if resp.status >= 400:
                         # Log a compact, redacted error; do not log repr(RequestInfo) which includes headers.
-                        _LOGGER.error(
+                        log_fn = (
+                            _LOGGER.debug
+                            if resp.status in ignore_statuses
+                            else _LOGGER.error
+                        )
+                        log_fn(
                             "HTTP error %s %s -> %s; body=%s",
                             method,
                             url,
@@ -137,6 +150,15 @@ class TermoWebClient:
                     return body_text
 
             except (TermoWebAuthError, TermoWebRateLimitError):
+                raise
+            except aiohttp.ClientResponseError as e:
+                if e.status not in ignore_statuses:
+                    _LOGGER.error(
+                        "Request %s %s failed (sanitized): %s",
+                        method,
+                        url,
+                        _redact_bearer(str(e)),
+                    )
                 raise
             except Exception as e:
                 _LOGGER.error(
@@ -345,7 +367,15 @@ class TermoWebClient:
         """Return live power for a PMO node in watts."""
         headers = await self._authed_headers()
         path = PMO_POWER_PATH_FMT.format(dev_id=dev_id, addr=addr)
-        data = await self._request("GET", path, headers=headers)
+        try:
+            data = await self._request(
+                "GET", path, headers=headers, ignore_statuses={404}
+            )
+        except aiohttp.ClientResponseError as err:
+            if err.status == 404:
+                _LOGGER.debug("PMO power unsupported for %s/%s", dev_id, addr)
+                return None
+            raise
         if isinstance(data, dict):
             power = data.get("power")
             try:
