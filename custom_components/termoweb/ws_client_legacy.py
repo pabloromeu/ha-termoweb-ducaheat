@@ -93,6 +93,10 @@ class TermoWebWSLegacyClient:
         self._closing = True
         if self._hb_task:
             self._hb_task.cancel()
+            try:
+                await self._hb_task
+            except asyncio.CancelledError:
+                pass
             self._hb_task = None
         if self._ws:
             try:
