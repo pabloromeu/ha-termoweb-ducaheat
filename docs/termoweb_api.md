@@ -133,3 +133,51 @@ Observed paths:
 We rely on these events to echo state after writes; a timed fallback refresh is recommended if echo is delayed.
 
 ---
+
+
+---
+
+## Historical samples (temperature & energy)
+
+**GET** `/api/v2/devs/{dev_id}/{node_type}/{addr}/samples?start={unix}&end={unix}`
+
+- `node_type`: `htr`, `thm`, or `pmo` (lowercase).
+- `start`/`end`: UNIX seconds. Query whole windows (e.g. start-of-day to start-of-next-day) for app-like results.
+- **Response**
+```json
+{
+  "samples": [
+    { "t": 1453420800, "temp": "20.0", "counter": "1015816.00" }
+  ]
+}
+```
+- **Fields**
+  - `t`: UNIX seconds.
+  - `temp`: ambient temperature (often string).
+  - `counter`: cumulative energy in **Wh** (monotonic; often string).
+- **Energy computation**
+  - kWh per interval = `(counter[i] - counter[i-1]) / 1000`.
+  - Aggregate per hour/day/month on the client (this matches the Android app's charts).
+- **Observed cadence**
+  - `htr`/`thm`: ~3600 s.
+  - `pmo`: ~900 s.
+- **Type quirks**
+  - Numbers may be strings; parse with Decimal/float before math.
+
+**Example**
+```bash
+curl -H "Authorization: Bearer $TOKEN"   "https://control.termoweb.net/api/v2/devs/$DEV/htr/$ADDR/samples?start=$START&end=$END"
+```
+
+---
+
+## PMO real‑time power
+
+**GET** `/api/v2/devs/{dev_id}/pmo/{addr}/power` →
+```json
+{ "power": 1245 }
+```
+
+Notes:
+- Useful for live tiles; history should come from `/samples` deltas.
+- For HA energy sensors, expose the **counter/1000** (kWh) as a `state_class: total_increasing` sensor and compute consumption deltas for period summaries.

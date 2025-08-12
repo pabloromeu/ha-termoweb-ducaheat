@@ -31,9 +31,37 @@ components:
       required: true
       schema:
         oneOf:
-          - { type: integer }
-          - { type: string }
-
+        - type: integer
+        - type: string
+    NodeType:
+      in: path
+      name: node_type
+      required: true
+      description: Node family. Lowercase path segment.
+      schema:
+        type: string
+        enum:
+        - htr
+        - thm
+        - pmo
+    Start:
+      in: query
+      name: start
+      required: true
+      description: Start of range, UNIX seconds (inclusive).
+      schema:
+        type: integer
+        format: int64
+        example: 1738291200
+    End:
+      in: query
+      name: end
+      required: true
+      description: End of range, UNIX seconds (exclusive in practice; app uses start-of-next-period).
+      schema:
+        type: integer
+        format: int64
+        example: 1738377600
   schemas:
     ErrorResponse:
       type: object
@@ -125,8 +153,47 @@ components:
           type: array
           minItems: 168
           maxItems: 168
-          items: { $ref: '#/components/schemas/ProgValue' }
-
+          items:
+            $ref: '#/components/schemas/ProgValue'
+    SamplePoint:
+      type: object
+      description: One historical sample.
+      properties:
+        t:
+          type: integer
+          format: int64
+          description: UNIX seconds timestamp.
+          example: 1453420800
+        temp:
+          oneOf:
+          - type: string
+            pattern: ^[0-9]+(\.[0-9])?$
+          - type: number
+          description: Ambient temperature. Often returned as string with one decimal.
+          example: '20.0'
+        counter:
+          oneOf:
+          - type: string
+            pattern: ^[0-9]+(\.[0-9]{1,2})?$
+          - type: number
+          description: Monotonic energy counter in Wh. Often returned as string with
+            two decimals.
+          example: '1015816.00'
+      additionalProperties: true
+    SamplesResponse:
+      type: object
+      properties:
+        samples:
+          type: array
+          items:
+            $ref: '#/components/schemas/SamplePoint'
+    PowerResponse:
+      type: object
+      properties:
+        power:
+          type: number
+          description: Instantaneous active power in watts.
+          example: 1245
 paths:
   /client/token:
     post:
@@ -399,3 +466,48 @@ paths:
               schema:
                 type: object
                 additionalProperties: true
+  /api/v2/devs/{dev_id}/{node_type}/{addr}/samples:
+    get:
+      summary: Historical samples (temp & energy counter)
+      description: 'Returns samples for a node (`htr`, `thm`, or `pmo`) within the
+        requested time window.
+
+        - `counter` is a cumulative Wh value (monotonic); derive kWh by summing deltas
+        and dividing by 1000.
+
+        - Observed cadence: `htr`/`thm` ~3600 s; `pmo` ~900 s.
+
+        - Numeric values may arrive as strings; parse accordingly.'
+      security:
+      - bearerAuth: []
+      parameters:
+      - $ref: '#/components/parameters/DevId'
+      - $ref: '#/components/parameters/NodeType'
+      - $ref: '#/components/parameters/Addr'
+      - $ref: '#/components/parameters/Start'
+      - $ref: '#/components/parameters/End'
+      responses:
+        '200':
+          description: Samples for the requested range
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SamplesResponse'
+  /api/v2/devs/{dev_id}/pmo/{addr}/power:
+    get:
+      summary: Real‑time power (PMO)
+      description: Instantaneous power in watts for a power monitor node.
+      security:
+      - bearerAuth: []
+      parameters:
+      - $ref: '#/components/parameters/DevId'
+      - $ref: '#/components/parameters/Addr'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PowerResponse'
+        '404':
+          description: Not a PMO node or not available
