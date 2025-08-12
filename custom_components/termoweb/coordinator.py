@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from datetime import timedelta
 from typing import Any, Dict, List, Optional
 
@@ -196,3 +197,52 @@ class TermoWebPmoPowerCoordinator(
         dev_map = data.setdefault(dev_id, {}).setdefault("pmo", {}).setdefault("power", {})
         dev_map[addr] = base_val
         self.async_set_updated_data(data)
+
+
+class TermoWebPmoEnergyCoordinator(
+    DataUpdateCoordinator[Dict[str, Dict[str, Any]]],
+):
+    """Coordinator polling cumulative energy for PMO nodes."""
+
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        client: TermoWebClient,
+        base: TermoWebCoordinator,
+    ) -> None:
+        super().__init__(
+            hass,
+            logger=_LOGGER,
+            name="termoweb_pmo_energy",
+            update_interval=timedelta(minutes=15),
+        )
+        self.client = client
+        self._base = base
+
+    async def _async_update_data(self) -> Dict[str, Dict[str, Any]]:
+        base_data = self._base.data or {}
+        data: Dict[str, Dict[str, Any]] = dict(self.data or {})
+        end = int(time.time())
+        start = end - 3600
+        for dev_id, dev in base_data.items():
+            nodes = dev.get("nodes") or {}
+            node_list = nodes.get("nodes") if isinstance(nodes, dict) else None
+            if not isinstance(node_list, list):
+                continue
+            for node in node_list:
+                if not isinstance(node, dict) or (node.get("type") or "").lower() != "pmo":
+                    continue
+                addr = str(node.get("addr"))
+                try:
+                    samples = await self.client.get_pmo_samples(dev_id, addr, start, end)
+                except Exception:
+                    continue
+                if not samples:
+                    continue
+                latest = max(samples, key=lambda s: s.get("t") or 0)
+                val = _as_float(latest.get("counter"))
+                if val is None:
+                    continue
+                dev_map = data.setdefault(dev_id, {}).setdefault("pmo", {}).setdefault("energy", {})
+                dev_map[addr] = val
+        return data
