@@ -37,6 +37,7 @@ class ClientResponseError(Exception):  # pragma: no cover - simple placeholder
 aiohttp_stub.ClientSession = ClientSession
 aiohttp_stub.ClientTimeout = ClientTimeout
 aiohttp_stub.ClientResponseError = ClientResponseError
+aiohttp_stub.ClientError = Exception
 
 sys.modules.setdefault("aiohttp", aiohttp_stub)
 aiohttp = aiohttp_stub

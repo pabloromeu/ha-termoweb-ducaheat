@@ -233,6 +233,25 @@ def test_ws_event_updates_sensor() -> None:
     asyncio.run(_run())
 
 
+def test_ws_event_updates_sensor_string_power() -> None:
+    async def _run() -> None:
+        hass = HomeAssistant()
+        base = MagicMock()
+        base.data = {
+            "dev1": {
+                "nodes": {"nodes": [{"type": "pmo", "addr": "1"}]},
+                "pmo": {"power": {"1": 0.0}},
+            }
+        }
+        client = MagicMock()
+        client.get_pmo_power = AsyncMock(return_value={"power": "5"})
+        coord = TermoWebPmoPowerCoordinator(hass, client, base, "entry")
+        await coord.async_config_entry_first_refresh()
+        assert coord.data["dev1"]["pmo"]["power"]["1"] == 5.0
+
+    asyncio.run(_run())
+
+
 def test_entity_registration() -> None:
     async def _run() -> None:
         hass = HomeAssistant()
