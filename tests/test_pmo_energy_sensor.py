@@ -167,6 +167,7 @@ from custom_components.termoweb.api import TermoWebClient  # noqa: E402
 from custom_components.termoweb.coordinator import (
     TermoWebPmoEnergyCoordinator,  # noqa: E402
 )
+from custom_components.termoweb.const import DOMAIN  # noqa: E402
 
 
 class MockResponse:
@@ -256,6 +257,7 @@ def test_energy_sensor_empty_samples() -> None:
         client.get_pmo_samples = AsyncMock(return_value=[])
         coord = TermoWebPmoEnergyCoordinator(hass, client, base)
         await coord.async_config_entry_first_refresh()
+        assert coord.data["dev1"]["pmo"]["energy"]["1"] is None
         ent = sensor_mod.TermoWebPmoEnergyTotal(
             coord, "entry", "dev1", "1", "Energy", "uid"
         )
@@ -285,5 +287,39 @@ def test_energy_sensor_counter_reset() -> None:
             coord, "entry", "dev1", "1", "Energy", "uid"
         )
         assert ent.native_value == 0.0
+
+    asyncio.run(_run())
+
+
+def test_entity_registration_empty_samples() -> None:
+    async def _run() -> None:
+        hass = HomeAssistant()
+        entry = MagicMock()
+        entry.entry_id = "e1"
+        data: Dict[str, Any] = {
+            "client": MagicMock(),
+            "coordinator": MagicMock(),
+        }
+        data["coordinator"].data = {
+            "dev1": {
+                "nodes": {"nodes": [{"type": "pmo", "addr": "1", "name": "PMO"}]}
+            }
+        }
+        data["client"].get_pmo_samples = AsyncMock(return_value=[])
+        data["client"].get_pmo_power = AsyncMock(return_value=0)
+        data["coordinator"].async_add_listener = MagicMock()
+        hass.data.setdefault(DOMAIN, {})[entry.entry_id] = data
+
+        added: list[Any] = []
+
+        def _add(ents):
+            added.extend(ents)
+
+        await sensor_mod.async_setup_entry(hass, entry, _add)
+        energy_entities = [
+            e for e in added if isinstance(e, sensor_mod.TermoWebPmoEnergyTotal)
+        ]
+        assert len(energy_entities) == 1
+        assert energy_entities[0].native_value is None
 
     asyncio.run(_run())

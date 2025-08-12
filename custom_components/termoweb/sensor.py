@@ -74,6 +74,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
                         .get("energy", {})
                     )
                     has_power = addr in power_map
+                    # Presence of the key (even if value is None) indicates a PMO node
                     has_energy = addr in energy_map
                     if has_power or has_energy:
                         _LOGGER.debug(

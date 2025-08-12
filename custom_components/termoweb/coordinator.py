@@ -266,16 +266,20 @@ class TermoWebPmoEnergyCoordinator(
                     continue
                 except Exception:
                     continue
-                if not samples:
-                    continue
-                latest = max(samples, key=lambda s: s.get("t") or 0)
-                val = _as_float(latest.get("counter"))
-                if val is None:
-                    continue
                 dev_map = (
                     data.setdefault(dev_id, {})
                     .setdefault("pmo", {})
                     .setdefault("energy", {})
                 )
+                if not samples:
+                    _LOGGER.debug(
+                        "PMO energy samples empty for %s/%s", dev_id, addr
+                    )
+                    dev_map[addr] = None
+                    continue
+                latest = max(samples, key=lambda s: s.get("t") or 0)
+                val = _as_float(latest.get("counter"))
+                if val is None:
+                    continue
                 dev_map[addr] = val
         return data
