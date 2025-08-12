@@ -232,20 +232,72 @@ class TermoWebClient:
         addr: str | int,
         *,
         mode: Optional[str] = None,          # "auto" | "manual" | "off"
-        stemp: Optional[float] = None,       # target setpoint (C)
+        stemp: Optional[float] = None,       # target setpoint (in current units)
+        prog: Optional[List[int]] = None,    # full 168-element weekly program (0=cold,1=night,2=day)
+        ptemp: Optional[List[float]] = None, # preset temperatures [cold, night, day] (in current units)
         units: str = "C",
     ) -> Any:
         """
-        Update heater settings (confirmed):
-        - POST /api/v2/devs/{dev_id}/htr/{addr}/settings
-        - When mode == "manual", server expects stemp as a **string**, e.g. "16.0".
-        - Some servers 400 if stemp is sent as a number. Stick to strings.
+        Update heater settings.
+
+        Supported fields (all optional):
+
+        * ``mode`` – "auto", "manual" or "off". When ``mode == 'manual'`` the server expects
+          ``stemp`` to be provided.
+        * ``stemp`` – target setpoint for manual mode. A number which will be formatted as a string
+          with one decimal before being sent.
+        * ``prog`` – list of 168 integers representing the weekly program. Each value must be one
+          of ``0`` (cold), ``1`` (night) or ``2`` (day). Monday 00:00 is index 0, Tuesday 00:00
+          is index 24, etc. When provided, this list is sent unchanged to the API.
+        * ``ptemp`` – list of three floats representing the preset temperatures in the order
+          [cold, night, day]. These values are formatted to one decimal and sent as strings.
+        * ``units`` – either ``"C"`` or ``"F"``. This field is always included and indicates
+          whether the numeric temperature values are in Celsius or Fahrenheit.
+
+        The payload will only include keys for the parameters passed by the caller, to avoid
+        overwriting unrelated settings on the device.
         """
+
+        # Always include units
         payload: Dict[str, Any] = {"units": units}
+
+        # Mode
         if mode is not None:
             payload["mode"] = mode
+
+        # Manual setpoint – format as string with one decimal
         if stemp is not None:
-            payload["stemp"] = f"{float(stemp):.1f}"  # force string, one decimal
+            try:
+                payload["stemp"] = f"{float(stemp):.1f}"
+            except Exception:
+                raise ValueError(f"Invalid stemp value: {stemp}")
+
+        # Weekly program – validate length and values
+        if prog is not None:
+            if not isinstance(prog, list) or len(prog) != 168:
+                raise ValueError("prog must be a list of 168 integers (0, 1, or 2)")
+            normalized: List[int] = []
+            for v in prog:
+                try:
+                    iv = int(v)
+                except Exception:
+                    raise ValueError(f"prog contains non-integer value: {v}")
+                if iv not in (0, 1, 2):
+                    raise ValueError(f"prog values must be 0, 1, or 2; got {iv}")
+                normalized.append(iv)
+            payload["prog"] = normalized
+
+        # Preset temperatures – validate length and convert to strings
+        if ptemp is not None:
+            if not isinstance(ptemp, list) or len(ptemp) != 3:
+                raise ValueError("ptemp must be a list of three numeric values [cold, night, day]")
+            formatted: List[str] = []
+            for v in ptemp:
+                try:
+                    formatted.append(f"{float(v):.1f}")
+                except Exception:
+                    raise ValueError(f"ptemp contains non-numeric value: {v}")
+            payload["ptemp"] = formatted
 
         headers = await self._authed_headers()
         path = f"/api/v2/devs/{dev_id}/htr/{addr}/settings"
