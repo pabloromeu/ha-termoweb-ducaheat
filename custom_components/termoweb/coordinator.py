@@ -5,7 +5,7 @@ import time
 from datetime import timedelta
 from typing import Any, Dict, List, Optional
 
-from aiohttp import ClientError
+from aiohttp import ClientError, ClientResponseError
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
@@ -163,20 +163,33 @@ class TermoWebPmoPowerCoordinator(
         for dev_id, dev in base_data.items():
             nodes = dev.get("nodes") or {}
             node_list = nodes.get("nodes") if isinstance(nodes, dict) else None
-            if not isinstance(node_list, list):
-                continue
-            for node in node_list:
-                if not isinstance(node, dict) or (node.get("type") or "").lower() != "pmo":
-                    continue
-                addr = str(node.get("addr"))
+            pmo_addrs: list[str] = []
+            if isinstance(node_list, list):
+                for node in node_list:
+                    if (
+                        isinstance(node, dict)
+                        and (node.get("type") or "").lower() == "pmo"
+                    ):
+                        pmo_addrs.append(str(node.get("addr")))
+            if not pmo_addrs:
+                pmo_addrs = dev.get("htr", {}).get("addrs") or []
+            for addr in pmo_addrs:
                 try:
                     js = await self.client.get_pmo_power(dev_id, addr)
+                except ClientResponseError as err:
+                    if err.status != 404:
+                        _LOGGER.debug("PMO power error for %s/%s: %s", dev_id, addr, err)
+                    continue
                 except Exception:
                     continue
                 val = _as_float(js.get("power") if isinstance(js, dict) else js)
                 if val is None:
                     continue
-                dev_map = data.setdefault(dev_id, {}).setdefault("pmo", {}).setdefault("power", {})
+                dev_map = (
+                    data.setdefault(dev_id, {})
+                    .setdefault("pmo", {})
+                    .setdefault("power", {})
+                )
                 dev_map[addr] = val
         return data
 
@@ -227,14 +240,23 @@ class TermoWebPmoEnergyCoordinator(
         for dev_id, dev in base_data.items():
             nodes = dev.get("nodes") or {}
             node_list = nodes.get("nodes") if isinstance(nodes, dict) else None
-            if not isinstance(node_list, list):
-                continue
-            for node in node_list:
-                if not isinstance(node, dict) or (node.get("type") or "").lower() != "pmo":
-                    continue
-                addr = str(node.get("addr"))
+            pmo_addrs: list[str] = []
+            if isinstance(node_list, list):
+                for node in node_list:
+                    if (
+                        isinstance(node, dict)
+                        and (node.get("type") or "").lower() == "pmo"
+                    ):
+                        pmo_addrs.append(str(node.get("addr")))
+            if not pmo_addrs:
+                pmo_addrs = dev.get("htr", {}).get("addrs") or []
+            for addr in pmo_addrs:
                 try:
                     samples = await self.client.get_pmo_samples(dev_id, addr, start, end)
+                except ClientResponseError as err:
+                    if err.status != 404:
+                        _LOGGER.debug("PMO energy error for %s/%s: %s", dev_id, addr, err)
+                    continue
                 except Exception:
                     continue
                 if not samples:
@@ -243,6 +265,10 @@ class TermoWebPmoEnergyCoordinator(
                 val = _as_float(latest.get("counter"))
                 if val is None:
                     continue
-                dev_map = data.setdefault(dev_id, {}).setdefault("pmo", {}).setdefault("energy", {})
+                dev_map = (
+                    data.setdefault(dev_id, {})
+                    .setdefault("pmo", {})
+                    .setdefault("energy", {})
+                )
                 dev_map[addr] = val
         return data

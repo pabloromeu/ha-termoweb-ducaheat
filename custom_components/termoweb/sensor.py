@@ -60,6 +60,63 @@ async def async_setup_entry(hass, entry, async_add_entities):
                         )
                     )
                     added.add(unique_id)
+
+                    power_map = (
+                        (pmo_coord.data or {})
+                        .get(dev_id, {})
+                        .get("pmo", {})
+                        .get("power", {})
+                    )
+                    energy_map = (
+                        (pmo_energy_coord.data or {})
+                        .get(dev_id, {})
+                        .get("pmo", {})
+                        .get("energy", {})
+                    )
+                    has_power = addr in power_map
+                    has_energy = addr in energy_map
+                    if has_power or has_energy:
+                        _LOGGER.debug(
+                            "PMO data found for heater %s/%s: power=%s energy=%s",
+                            dev_id,
+                            addr,
+                            has_power,
+                            has_energy,
+                        )
+                        if has_power:
+                            unique_id_p = f"{DOMAIN}:{dev_id}:pmo:{addr}:power"
+                            if unique_id_p not in added:
+                                ent_name_p = f"{base_name} Power"
+                                new_entities.append(
+                                    TermoWebPmoPower(
+                                        pmo_coord,
+                                        entry.entry_id,
+                                        dev_id,
+                                        addr,
+                                        ent_name_p,
+                                        unique_id_p,
+                                    )
+                                )
+                                added.add(unique_id_p)
+                        if has_energy:
+                            unique_id_energy = f"{dev_id}:{addr}:energy"
+                            if unique_id_energy not in added:
+                                ent_name_energy = f"{base_name} Energy Total"
+                                new_entities.append(
+                                    TermoWebPmoEnergyTotal(
+                                        pmo_energy_coord,
+                                        entry.entry_id,
+                                        dev_id,
+                                        addr,
+                                        ent_name_energy,
+                                        unique_id_energy,
+                                    )
+                                )
+                                added.add(unique_id_energy)
+                    else:
+                        _LOGGER.debug(
+                            "No PMO data for heater %s/%s", dev_id, addr
+                        )
                 elif ntype == "pmo":
                     unique_id = f"{DOMAIN}:{dev_id}:pmo:{addr}:power"
                     if unique_id in added:
