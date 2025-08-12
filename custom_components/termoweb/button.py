@@ -33,9 +33,12 @@ async def async_setup_entry(hass, entry, async_add_entities):
             uid = f"{DOMAIN}:{dev_id}:refresh"
             if uid in cur_ids:
                 continue
-            to_add.append(TermoWebRefreshButton(coordinator, dev_id))
+            entity = TermoWebRefreshButton(coordinator, dev_id)
+            to_add.append(entity)
+            cur_ids.add(uid)
         if to_add:
             async_add_entities(to_add)
+            new.extend(to_add)
 
     coordinator.async_add_listener(_on_update)
 
