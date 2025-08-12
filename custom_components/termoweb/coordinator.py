@@ -7,9 +7,11 @@ from typing import Any, Dict, List, Optional
 from aiohttp import ClientError
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
+from homeassistant.core import callback
 
 from .api import TermoWebClient, TermoWebRateLimitError, TermoWebAuthError
-from .const import MIN_POLL_INTERVAL
+from .const import MIN_POLL_INTERVAL, signal_ws_data
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -113,3 +115,69 @@ class TermoWebCoordinator(DataUpdateCoordinator[Dict[str, Dict[str, Any]]]):  # 
             raise UpdateFailed(f"Rate limited; backing off to {self._backoff}s") from err
         except (ClientError, TermoWebAuthError) as err:
             raise UpdateFailed(f"API error: {err}") from err
+
+
+class TermoWebPmoPowerCoordinator(
+    DataUpdateCoordinator[Dict[str, Dict[str, Any]]]
+):
+    """Coordinator polling real-time power for PMO nodes."""
+
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        client: TermoWebClient,
+        base: TermoWebCoordinator,
+        entry_id: str,
+    ) -> None:
+        super().__init__(
+            hass,
+            logger=_LOGGER,
+            name="termoweb_pmo_power",
+            update_interval=timedelta(seconds=60),
+        )
+        self.client = client
+        self._base = base
+        self._unsub = async_dispatcher_connect(
+            hass, signal_ws_data(entry_id), self._on_ws_data
+        )
+
+    async def _async_update_data(self) -> Dict[str, Dict[str, Any]]:
+        base_data = self._base.data or {}
+        data: Dict[str, Dict[str, Any]] = dict(self.data or {})
+        for dev_id, dev in base_data.items():
+            nodes = dev.get("nodes") or {}
+            node_list = nodes.get("nodes") if isinstance(nodes, dict) else None
+            if not isinstance(node_list, list):
+                continue
+            for node in node_list:
+                if not isinstance(node, dict) or (node.get("type") or "").lower() != "pmo":
+                    continue
+                addr = str(node.get("addr"))
+                try:
+                    js = await self.client.get_pmo_power(dev_id, addr)
+                except Exception:
+                    continue
+                val = _as_float(js.get("power") if isinstance(js, dict) else js)
+                if val is None:
+                    continue
+                dev_map = data.setdefault(dev_id, {}).setdefault("pmo", {}).setdefault("power", {})
+                dev_map[addr] = val
+        return data
+
+    @callback
+    def _on_ws_data(self, payload: dict) -> None:
+        if payload.get("kind") != "pmo_power":
+            return
+        dev_id = payload.get("dev_id")
+        addr = payload.get("addr")
+        base_val = (
+            (self._base.data or {})
+            .get(dev_id, {})
+            .get("pmo", {})
+            .get("power", {})
+            .get(addr)
+        )
+        data: Dict[str, Dict[str, Any]] = dict(self.data or {})
+        dev_map = data.setdefault(dev_id, {}).setdefault("pmo", {}).setdefault("power", {})
+        dev_map[addr] = base_val
+        self.async_set_updated_data(data)
