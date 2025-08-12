@@ -115,7 +115,7 @@ class TermoWebHeaterTemp(CoordinatorEntity, SensorEntity):
         if payload.get("dev_id") != self._dev_id:
             return
         addr = payload.get("addr")
-        if addr is not None and addr != self._addr:
+        if addr is not None and str(addr) != self._addr:
             return
         # Thread-safe state update
         self.schedule_update_ha_state()
