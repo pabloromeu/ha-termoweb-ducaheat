@@ -156,6 +156,7 @@ class TermoWebPmoPowerCoordinator(
         self._unsub = async_dispatcher_connect(
             hass, signal_ws_data(entry_id), self._on_ws_data
         )
+        self._unsupported: set[tuple[str, str]] = set()
 
     async def _async_update_data(self) -> Dict[str, Dict[str, Any]]:
         base_data = self._base.data or {}
@@ -174,15 +175,21 @@ class TermoWebPmoPowerCoordinator(
             if not pmo_addrs:
                 pmo_addrs = dev.get("htr", {}).get("addrs") or []
             for addr in pmo_addrs:
+                if (dev_id, addr) in self._unsupported:
+                    continue
                 try:
-                    js = await self.client.get_pmo_power(dev_id, addr)
+                    power = await self.client.get_pmo_power(dev_id, addr)
                 except ClientResponseError as err:
-                    if err.status != 404:
-                        _LOGGER.debug("PMO power error for %s/%s: %s", dev_id, addr, err)
+                    _LOGGER.debug(
+                        "PMO power error for %s/%s: %s", dev_id, addr, err
+                    )
                     continue
                 except Exception:
                     continue
-                val = _as_float(js.get("power") if isinstance(js, dict) else js)
+                if power is None:
+                    self._unsupported.add((dev_id, addr))
+                    continue
+                val = _as_float(power)
                 if val is None:
                     continue
                 dev_map = (

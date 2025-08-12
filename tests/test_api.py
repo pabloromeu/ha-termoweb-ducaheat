@@ -6,6 +6,7 @@ import sys
 import types
 from pathlib import Path
 from typing import Any, Dict
+import logging
 from unittest.mock import MagicMock
 
 import pytest
@@ -155,7 +156,7 @@ def test_get_pmo_power() -> None:
     asyncio.run(_run())
 
 
-def test_get_pmo_power_404() -> None:
+def test_get_pmo_power_404(caplog) -> None:
     async def _run() -> None:
         session = MagicMock()
         session.post.return_value = MockResponse(
@@ -169,10 +170,12 @@ def test_get_pmo_power_404() -> None:
             headers={"Content-Type": "application/json"},
         )
         client = TermoWebClient(session, "user", "pass")
-        with pytest.raises(aiohttp.ClientResponseError):
-            await client.get_pmo_power("dev1", 2)
+        caplog.set_level(logging.DEBUG)
+        power = await client.get_pmo_power("dev1", 2)
+        assert power is None
 
     asyncio.run(_run())
+    assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
 
 
 def test_get_pmo_samples() -> None:
