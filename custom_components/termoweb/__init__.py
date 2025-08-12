@@ -142,11 +142,14 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             await task
         except asyncio.CancelledError:
             pass
-    for client in list(rec.get("ws_clients", {}).values()):
+        except Exception:
+            _LOGGER.exception("WS task for %s failed to cancel cleanly", dev_id)
+
+    for dev_id, client in list(rec.get("ws_clients", {}).items()):
         try:
             await client.stop()
         except Exception:
-            pass
+            _LOGGER.exception("WS client for %s failed to stop", dev_id)
 
     if "unsub_ws_status" in rec and callable(rec["unsub_ws_status"]):
         rec["unsub_ws_status"]()
