@@ -258,12 +258,6 @@ class TermoWebClient:
         path = f"/api/v2/devs/{dev_id}/htr/{addr}/settings"
         return await self._request("GET", path, headers=headers)
 
-    async def get_pmo_power(self, dev_id: str, addr: str | int) -> Any:
-        """Return real-time power for a power monitor node."""
-        headers = await self._authed_headers()
-        path = f"/api/v2/devs/{dev_id}/pmo/{addr}/power"
-        return await self._request("GET", path, headers=headers)
-
     async def set_htr_settings(
         self,
         dev_id: str,
