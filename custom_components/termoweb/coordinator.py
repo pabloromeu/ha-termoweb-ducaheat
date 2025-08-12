@@ -19,6 +19,21 @@ _LOGGER = logging.getLogger(__name__)
 HTR_SETTINGS_PER_CYCLE = 1
 
 
+def _as_float(value: Any) -> Optional[float]:
+    """Safely convert a value to float."""
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        value = value.strip()
+        if not value:
+            return None
+        try:
+            return float(value)
+        except ValueError:
+            return None
+    return None
+
+
 class TermoWebCoordinator(DataUpdateCoordinator[Dict[str, Dict[str, Any]]]):  # dev_id -> per-device data
     """Polls TermoWeb and exposes a per-device dict used by platforms."""
 
