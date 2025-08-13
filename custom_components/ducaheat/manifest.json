@@ -1,0 +1,16 @@
+{
+  "domain": "ducaheat",
+  "name": "DucaHeat",
+  "codeowners": [
+    "@pabloromeu"
+  ],
+  "config_flow": true,
+  "documentation": "https://github.com/pabloromeu/ha-termoweb-ducaheat#readme",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/pabloromeu/ha-termoweb-ducaheat/issues",
+  "loggers": [
+    "custom_components.ducaheat"
+  ],
+  "requirements": [],
+  "version": "1.0.0"
+}

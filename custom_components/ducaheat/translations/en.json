@@ -1,0 +1,21 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Ducaheat",
+        "description": "Sign in to your Ducaheat account.",
+        "data": {
+          "username": "Email",
+          "password": "Password",
+          "base_url": "Base URL",
+          "basic_b64": "Basic (Base64 client_id:client_secret)",
+          "poll_interval": "Poll interval (seconds)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Login failed or API unreachable. Check URL/Basic header/credentials."
+    },
+    "abort": {}
+  }
+}
