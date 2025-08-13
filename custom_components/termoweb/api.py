@@ -393,7 +393,19 @@ class TermoWebClient:
         headers = await self._authed_headers()
         path = PMO_SAMPLES_PATH_FMT.format(dev_id=dev_id, addr=addr)
         params = {"start": start, "end": end}
-        data = await self._request("GET", path, headers=headers, params=params)
+        try:
+            data = await self._request(
+                "GET",
+                path,
+                headers=headers,
+                params=params,
+                ignore_statuses={404},
+            )
+        except aiohttp.ClientResponseError as err:
+            if err.status == 404:
+                _LOGGER.debug("PMO samples unsupported for %s/%s", dev_id, addr)
+                return []
+            raise
         if isinstance(data, dict) and isinstance(data.get("samples"), list):
             return [s for s in data["samples"] if isinstance(s, dict)]
         _LOGGER.debug(

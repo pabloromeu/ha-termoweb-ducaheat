@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import sys
+import asyncio
+import logging
 import types
 from typing import Any, Dict
 from unittest.mock import AsyncMock, MagicMock
@@ -221,6 +223,27 @@ def test_get_pmo_samples_request() -> None:
         assert params == {"start": 0, "end": 10}
 
     asyncio.run(_run())
+
+
+def test_get_pmo_samples_404_no_error_log(caplog) -> None:
+    async def _run() -> None:
+        client = TermoWebClient(MagicMock(), "u", "p")
+        client._authed_headers = AsyncMock(return_value={})
+
+        from custom_components.termoweb import api as api_mod
+
+        async def raise_404(*args, **kwargs):
+            err = api_mod.aiohttp.ClientResponseError(None, ())
+            err.status = 404
+            raise err
+
+        client._request = AsyncMock(side_effect=raise_404)
+        with caplog.at_level(logging.DEBUG):
+            samples = await client.get_pmo_samples("d1", "2", 0, 10)
+        assert samples == []
+    asyncio.run(_run())
+    assert "PMO samples unsupported for d1/2" in caplog.text
+    assert not any(r.levelno >= logging.ERROR for r in caplog.records)
 
 
 def test_energy_sensor_wh_to_kwh() -> None:

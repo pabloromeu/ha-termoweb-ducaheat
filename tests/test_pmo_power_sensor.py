@@ -4,6 +4,7 @@ from typing import Any, Dict
 from unittest.mock import AsyncMock, MagicMock
 
 import asyncio
+import logging
 import sys
 import types
 from pathlib import Path
@@ -199,6 +200,27 @@ def test_get_pmo_power_url() -> None:
         assert kwargs.get("ignore_statuses") == {404}
 
     asyncio.run(_run())
+
+
+def test_get_pmo_power_404_no_error_log(caplog) -> None:
+    async def _run() -> None:
+        client = TermoWebClient(MagicMock(), "u", "p")
+        client._authed_headers = AsyncMock(return_value={})
+
+        from custom_components.termoweb import api as api_mod
+
+        async def raise_404(*args, **kwargs):
+            err = api_mod.aiohttp.ClientResponseError(None, ())
+            err.status = 404
+            raise err
+
+        client._request = AsyncMock(side_effect=raise_404)
+        with caplog.at_level(logging.DEBUG):
+            result = await client.get_pmo_power("d1", "2")
+        assert result is None
+    asyncio.run(_run())
+    assert "PMO power unsupported for d1/2" in caplog.text
+    assert not any(r.levelno >= logging.ERROR for r in caplog.records)
 
 
 def test_ws_event_updates_sensor() -> None:
