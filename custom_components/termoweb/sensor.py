@@ -40,95 +40,116 @@ async def async_setup_entry(hass, entry, async_add_entities):
         for dev_id, dev in data_now.items():
             nodes = dev.get("nodes") or {}
             node_list = nodes.get("nodes") if isinstance(nodes, dict) else None
-            if not isinstance(node_list, list):
-                continue
-
-            for node in node_list:
-                if not isinstance(node, dict):
-                    continue
-                ntype = (node.get("type") or "").lower()
-                addr = str(node.get("addr"))
-                base_name = (node.get("name") or f"Node {addr}").strip() or f"Node {addr}"
-                if ntype == "htr":
-                    unique_id = f"{DOMAIN}:{dev_id}:htr:{addr}:temp"
-                    if unique_id in added:
+            power_addrs = pmo_coord.addr_set.get(dev_id, set())
+            energy_addrs = pmo_energy_coord.addr_set.get(dev_id, set())
+            processed: set[str] = set()
+            if isinstance(node_list, list):
+                for node in node_list:
+                    if not isinstance(node, dict):
                         continue
-                    ent_name = f"{base_name} Temperature"
-                    new_entities.append(
-                        TermoWebHeaterTemp(
-                            coordinator, entry.entry_id, dev_id, addr, ent_name, unique_id
-                        )
-                    )
-                    added.add(unique_id)
+                    ntype = (node.get("type") or "").lower()
+                    addr = str(node.get("addr"))
+                    base_name = (node.get("name") or f"Node {addr}").strip() or f"Node {addr}"
+                    processed.add(addr)
+                    if ntype == "htr":
+                        unique_id = f"{DOMAIN}:{dev_id}:htr:{addr}:temp"
+                        if unique_id not in added:
+                            ent_name = f"{base_name} Temperature"
+                            new_entities.append(
+                                TermoWebHeaterTemp(
+                                    coordinator, entry.entry_id, dev_id, addr, ent_name, unique_id
+                                )
+                            )
+                            added.add(unique_id)
 
-                    power_map = (
-                        (pmo_coord.data or {})
-                        .get(dev_id, {})
-                        .get("pmo", {})
-                        .get("power", {})
-                    )
-                    energy_map = (
-                        (pmo_energy_coord.data or {})
-                        .get(dev_id, {})
-                        .get("pmo", {})
-                        .get("energy", {})
-                    )
-                    has_power = addr in power_map
-                    # Presence of the key (even if value is None) indicates a PMO node
-                    has_energy = addr in energy_map
-                    if has_power or has_energy:
-                        _LOGGER.debug(
-                            "PMO data found for heater %s/%s: power=%s energy=%s",
-                            dev_id,
-                            addr,
-                            has_power,
-                            has_energy,
-                        )
-                        if has_power:
-                            unique_id_p = f"{DOMAIN}:{dev_id}:pmo:{addr}:power"
-                            if unique_id_p not in added:
-                                ent_name_p = f"{base_name} Power"
-                                new_entities.append(
-                                    TermoWebPmoPower(
-                                        pmo_coord,
-                                        entry.entry_id,
-                                        dev_id,
-                                        addr,
-                                        ent_name_p,
-                                        unique_id_p,
+                        has_power = addr in power_addrs
+                        has_energy = addr in energy_addrs
+                        if has_power or has_energy:
+                            _LOGGER.debug(
+                                "PMO data found for heater %s/%s: power=%s energy=%s",
+                                dev_id,
+                                addr,
+                                has_power,
+                                has_energy,
+                            )
+                            if has_power:
+                                unique_id_p = f"{DOMAIN}:{dev_id}:pmo:{addr}:power"
+                                if unique_id_p not in added:
+                                    ent_name_p = f"{base_name} Power"
+                                    new_entities.append(
+                                        TermoWebPmoPower(
+                                            pmo_coord,
+                                            entry.entry_id,
+                                            dev_id,
+                                            addr,
+                                            ent_name_p,
+                                            unique_id_p,
+                                        )
                                     )
-                                )
-                                added.add(unique_id_p)
-                        if has_energy:
-                            unique_id_energy = f"{dev_id}:{addr}:energy"
-                            if unique_id_energy not in added:
-                                ent_name_energy = f"{base_name} Energy Total"
-                                new_entities.append(
-                                    TermoWebPmoEnergyTotal(
-                                        pmo_energy_coord,
-                                        entry.entry_id,
-                                        dev_id,
-                                        addr,
-                                        ent_name_energy,
-                                        unique_id_energy,
+                                    added.add(unique_id_p)
+                            if has_energy:
+                                unique_id_energy = f"{dev_id}:{addr}:energy"
+                                if unique_id_energy not in added:
+                                    ent_name_energy = f"{base_name} Energy Total"
+                                    new_entities.append(
+                                        TermoWebPmoEnergyTotal(
+                                            pmo_energy_coord,
+                                            entry.entry_id,
+                                            dev_id,
+                                            addr,
+                                            ent_name_energy,
+                                            unique_id_energy,
+                                        )
                                     )
+                                    added.add(unique_id_energy)
+                        else:
+                            _LOGGER.debug(
+                                "No PMO data for heater %s/%s", dev_id, addr
+                            )
+                    elif ntype == "pmo":
+                        unique_id = f"{DOMAIN}:{dev_id}:pmo:{addr}:power"
+                        if unique_id not in added:
+                            ent_name = f"{base_name} Power"
+                            new_entities.append(
+                                TermoWebPmoPower(
+                                    pmo_coord, entry.entry_id, dev_id, addr, ent_name, unique_id
                                 )
-                                added.add(unique_id_energy)
-                    else:
-                        _LOGGER.debug(
-                            "No PMO data for heater %s/%s", dev_id, addr
+                            )
+                            added.add(unique_id)
+                        unique_id_energy = f"{dev_id}:{addr}:energy"
+                        if unique_id_energy not in added:
+                            ent_name_energy = f"{base_name} Energy Total"
+                            new_entities.append(
+                                TermoWebPmoEnergyTotal(
+                                    pmo_energy_coord,
+                                    entry.entry_id,
+                                    dev_id,
+                                    addr,
+                                    ent_name_energy,
+                                    unique_id_energy,
+                                )
+                            )
+                            added.add(unique_id_energy)
+
+            extra_addrs = (power_addrs | energy_addrs) - processed
+            for addr in extra_addrs:
+                base_name = f"Node {addr}"
+                if addr in power_addrs:
+                    unique_id_p = f"{DOMAIN}:{dev_id}:pmo:{addr}:power"
+                    if unique_id_p not in added:
+                        ent_name_p = f"{base_name} Power"
+                        new_entities.append(
+                            TermoWebPmoPower(
+                                pmo_coord,
+                                entry.entry_id,
+                                dev_id,
+                                addr,
+                                ent_name_p,
+                                unique_id_p,
+                            )
                         )
-                elif ntype == "pmo":
-                    unique_id = f"{DOMAIN}:{dev_id}:pmo:{addr}:power"
-                    if unique_id in added:
-                        continue
-                    ent_name = f"{base_name} Power"
-                    new_entities.append(
-                        TermoWebPmoPower(
-                            pmo_coord, entry.entry_id, dev_id, addr, ent_name, unique_id
-                        )
-                    )
-                    added.add(unique_id)
+                        added.add(unique_id_p)
+                if addr in energy_addrs:
                     unique_id_energy = f"{dev_id}:{addr}:energy"
                     if unique_id_energy not in added:
                         ent_name_energy = f"{base_name} Energy Total"

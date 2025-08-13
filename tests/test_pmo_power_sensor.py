@@ -283,6 +283,42 @@ def test_entity_registration() -> None:
     asyncio.run(_run())
 
 
+def test_fallback_discovery_from_addr_set() -> None:
+    async def _run() -> None:
+        hass = HomeAssistant()
+        entry = MagicMock()
+        entry.entry_id = "e1"
+        data: Dict[str, Any] = {
+            "client": MagicMock(),
+            "coordinator": MagicMock(),
+        }
+        data["coordinator"].data = {
+            "dev1": {
+                "nodes": {"nodes": [{"type": "htr", "addr": "1", "name": "H1"}]},
+                "htr": {"addrs": ["1"]},
+            }
+        }
+        data["client"].get_pmo_power = AsyncMock(return_value=None)
+        data["client"].get_pmo_samples = AsyncMock(return_value=[])
+        data["coordinator"].async_add_listener = MagicMock()
+        hass.data.setdefault(DOMAIN, {})[entry.entry_id] = data
+
+        added: list[Any] = []
+
+        def _add(ents):
+            added.extend(ents)
+
+        await sensor_mod.async_setup_entry(hass, entry, _add)
+        power_entities = [e for e in added if isinstance(e, sensor_mod.TermoWebPmoPower)]
+        energy_entities = [e for e in added if isinstance(e, sensor_mod.TermoWebPmoEnergyTotal)]
+        assert len(power_entities) == 1
+        assert power_entities[0].native_value is None
+        assert len(energy_entities) == 1
+        assert energy_entities[0].native_value is None
+
+    asyncio.run(_run())
+
+
 def test_coordinator_skips_unsupported() -> None:
     async def _run() -> None:
         hass = HomeAssistant()

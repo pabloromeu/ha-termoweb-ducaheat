@@ -153,6 +153,7 @@ class TermoWebPmoPowerCoordinator(
         )
         self.client = client
         self._base = base
+        self.addr_set: dict[str, set[str]] = {}
         self._unsub = async_dispatcher_connect(
             hass, signal_ws_data(entry_id), self._on_ws_data
         )
@@ -175,6 +176,7 @@ class TermoWebPmoPowerCoordinator(
             if not pmo_addrs:
                 pmo_addrs = dev.get("htr", {}).get("addrs") or []
             for addr in pmo_addrs:
+                self.addr_set.setdefault(dev_id, set()).add(addr)
                 if (dev_id, addr) in self._unsupported:
                     continue
                 try:
@@ -216,6 +218,8 @@ class TermoWebPmoPowerCoordinator(
         data: Dict[str, Dict[str, Any]] = dict(self.data or {})
         dev_map = data.setdefault(dev_id, {}).setdefault("pmo", {}).setdefault("power", {})
         dev_map[addr] = base_val
+        if dev_id is not None and addr is not None:
+            self.addr_set.setdefault(dev_id, set()).add(addr)
         self.async_set_updated_data(data)
 
 
@@ -238,6 +242,7 @@ class TermoWebPmoEnergyCoordinator(
         )
         self.client = client
         self._base = base
+        self.addr_set: dict[str, set[str]] = {}
 
     async def _async_update_data(self) -> Dict[str, Dict[str, Any]]:
         base_data = self._base.data or {}
@@ -258,6 +263,7 @@ class TermoWebPmoEnergyCoordinator(
             if not pmo_addrs:
                 pmo_addrs = dev.get("htr", {}).get("addrs") or []
             for addr in pmo_addrs:
+                self.addr_set.setdefault(dev_id, set()).add(addr)
                 try:
                     samples = await self.client.get_pmo_samples(dev_id, addr, start, end)
                 except ClientResponseError as err:
