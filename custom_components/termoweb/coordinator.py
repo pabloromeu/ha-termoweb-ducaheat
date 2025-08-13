@@ -189,6 +189,7 @@ class TermoWebPmoPowerCoordinator(
                 except Exception:
                     continue
                 if power is None:
+                    _LOGGER.debug("PMO power unsupported for %s/%s", dev_id, addr)
                     self._unsupported.add((dev_id, addr))
                     continue
                 val = _as_float(power)
@@ -267,8 +268,7 @@ class TermoWebPmoEnergyCoordinator(
                 try:
                     samples = await self.client.get_pmo_samples(dev_id, addr, start, end)
                 except ClientResponseError as err:
-                    if err.status != 404:
-                        _LOGGER.debug("PMO energy error for %s/%s: %s", dev_id, addr, err)
+                    _LOGGER.debug("PMO energy error for %s/%s: %s", dev_id, addr, err)
                     continue
                 except Exception:
                     continue
