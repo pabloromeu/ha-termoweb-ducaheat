@@ -1,6 +1,6 @@
-# TermoWeb heaters for Home Assistant
+# Ducaheat heaters for Home Assistant
 
-Control your **TermoWeb** electric heaters in **Home Assistant** — from the HA app, automations, scenes, and voice assistants.
+Control your **Ducaheat** electric heaters in **Home Assistant** — from the HA app, automations, scenes, and voice assistants.
 
 [![Open in HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=ha-termoweb&repository=ha-termoweb&category=integration)
 [![Open your Home Assistant instance and start setting up the integration.](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=termoweb)
@@ -11,39 +11,29 @@ Control your **TermoWeb** electric heaters in **Home Assistant** — from the HA
 
 ## Who is this for?
 
-For someone who runs Home Assistant and already uses the **TermoWeb** mobile app or signs in at **control.termoweb.net** (or **control2.termoweb.net**) to manage their electric heaters. They want to see and control those heaters in Home Assistant, use automations (e.g., bedtime setback), and enable voice control. The manufacturer’s app doesn’t integrate with HA — this add-on provides the missing link.
+For someone who runs Home Assistant and already uses the **Ducaheat** mobile app or signs in at the **Ducaheat/TermoWeb hybrid API endpoint** to manage their electric heaters. They want to see and control those heaters in Home Assistant, use automations (e.g., bedtime setback), and enable voice control. The manufacturer’s app doesn’t integrate with HA — this add-on provides the missing link.
 
 ---
 
-## Brands commonly using the TermoWeb app
+## About this integration
 
-These product lines are documented to work with the **TermoWeb** portal/app:
-
-- **S&P — Soler & Palau**: “**Termoweb**” kits and **EMI-TECH Termoweb** radiators.  
-- **Ecotermi / Linea Plus**: **Serie Termoweb** radiators.  
-- **EHC — Electric Heating Company**: **eco SAVE** Smart Gateway kits that register on the TermoWeb portal.
-- **ATC (UK/Ireland)**: **Sun Ray Wifi** radiators with Wifi gateway.
-
-
-> If a brand isn’t listed but the user signs in at **control.termoweb.net** (or **control2.termoweb.net**) with an app called **TermoWeb**, this integration should work.
-
-_Not supported:_ brands using different apps/backends (for example “Ducaheat/Ducasa”’s own “Termoweb” app, which is a separate system).
+This integration is designed specifically for **Ducaheat** systems.
 
 ---
 
 ## What you can do in Home Assistant
 
-- Turn heaters **On/Off** and set **target temperature**.
-- Choose **Auto** or **Manual** (as “presets” in HA).
-- See room temperature and heating state.
-- Use **automations**, **scenes**, and **voice assistants** (via HA’s Google/Alexa integrations).
+- Change mode: **On**, **Off**, **Auto**, or **Boost**.  
+- View current temperature and heating state.  
+- Use **automations**, **scenes**, and **voice assistants** (via HA’s Google/Alexa integrations).  
+- Note: Target temperature changes are only possible via **Boost** mode.
 
 ---
 
 ## What you’ll need
 
-- A working TermoWeb setup (gateway connected to the router, heaters paired).
-- The **TermoWeb account email & password** (the same used in the mobile app / web).
+- A working Ducaheat setup (gateway connected to the router, heaters paired).  
+- The **Ducaheat account email & password** (the same used in the mobile app / web).  
 - Home Assistant (Core, OS, or Container) with internet access.
 
 ---
@@ -54,10 +44,10 @@ _Not supported:_ brands using different apps/backends (for example “Ducaheat/D
 
 1) Open **HACS → Integrations** in Home Assistant.  
 2) Click **⋮** (top-right) → **Custom repositories** → **Add**.  
-3) Paste: `https://github.com/ha-termoweb/ha-termoweb` and choose **Integration**.  
+3) Paste: `https://github.com/pabloromeu/ha-termoweb-ducaheat` and choose **Integration**.  
    Or click:  
    [![Open in HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=ha-termoweb&repository=ha-termoweb&category=integration)  
-4) Search for **TermoWeb** in HACS and **Install**.  
+4) Search for **Ducaheat** in HACS and **Install**.  
 5) **Restart Home Assistant** when prompted.
 
 ### Option B — Manual
@@ -69,14 +59,13 @@ _Not supported:_ brands using different apps/backends (for example “Ducaheat/D
 ---
 
 ## Set up the integration
-ha-termoweb/ha-termoweb
-1) In Home Assistant go to **Settings → Devices & Services → Add Integration** and search **TermoWeb**,  
+
+1) In Home Assistant go to **Settings → Devices & Services → Add Integration** and search **Ducaheat**,  
    or click:  
-   [![Open your Home Assistant instance and start setting up the integration.](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=termoweb)
-2) Enter the **TermoWeb login** (email & password).  
+   [![Open your Home Assistant instance and start setting up the integration.](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=termoweb)  
+2) Enter the **Ducaheat login** (email & password).  
 3) **Portal address**:  
-   - If the website used is **`https://control.termoweb.net`**, enter that.  
-   - Some systems use **`https://control2.termoweb.net`** — use whichever site is used today.  
+   - Enter the appropriate Ducaheat/TermoWeb hybrid API endpoint used today.  
 4) Complete the wizard. Heaters will appear under **Devices**; add them to dashboards or use them in automations.
 
 ---
@@ -89,8 +78,9 @@ ha-termoweb/ha-termoweb
 
 ## Troubleshooting
 
-- **Login fails:** First confirm credentials at the TermoWeb website (control.termoweb.net / control2.termoweb.net).  
+- **Login fails:** First confirm credentials at the Ducaheat control app or portal.  
 - **No devices found:** Check the **gateway** is powered and online (LEDs), and that the manufacturer app shows heaters online.  
+- **Settings limitations:** Not all heater settings may be adjustable due to API limitations.  
 - **Need help?** Open a GitHub issue with brand/model and a brief description. **Never share passwords or private info.**
 
 ---
@@ -105,5 +95,4 @@ ha-termoweb/ha-termoweb
 
 ## Search keywords
 
-*Home Assistant TermoWeb, TermoWeb heaters Home Assistant, ATC radiators, S&P TermoWeb Home Assistant, Soler & Palau Termoweb, Ecotermi Termoweb, Linea Plus Termoweb, Electric Heating Company eco SAVE Home Assistant, eco SAVE Smart Gateway Home Assistant*
-
+*Home Assistant Ducaheat, Ducaheat heaters Home Assistant, Ducaheat control app, Ducaheat integration Home Assistant*
